@@ -482,9 +482,9 @@ async function renderContent(){
       <p style="color:var(--text-mid); font-size:13px;">Could not connect to Supabase. Check that the project URL/key in this file are correct and that <b>schema_operations.sql</b> has been run in your Supabase SQL editor.</p></div>`;
     return;
   }
-  if(currentTab !== 'dashboard' && !currentUser){
+  if(!currentUser){
     el.innerHTML = `<div class="panel"><div class="panel-title">Sign in required</div>
-      <p style="color:var(--text-mid); font-size:13px; margin-bottom:14px;">This section is only available to signed-in team members. The Dashboard is open to everyone.</p>
+      <p style="color:var(--text-mid); font-size:13px; margin-bottom:14px;">This app is for internal staff only. Please sign in to continue.</p>
       <button class="btn btn-primary" id="lockedSignInBtn">Sign In</button></div>`;
     document.getElementById('lockedSignInBtn').onclick = showLoginScreen;
     return;
@@ -756,9 +756,6 @@ async function renderDashboard(el){
   const todaysVisits = (data && data.visits_today_count) || 0;
 
   el.innerHTML = `
-    ${!currentUser ? `<div class="panel" style="margin-bottom:14px; padding:14px 18px;">
-      <p style="font-size:13px; color:var(--text-mid); margin:0;">You're viewing the public summary as a guest. <button class="btn" id="dashSignInBtn" style="padding:5px 12px; margin-left:6px;">Sign in</button> for full access to sites, staff, contracts, and more.</p>
-    </div>` : ''}
     <div class="grid-4">
       <div class="stat-card ${shortageSites.length?'crit':'ok'}"><div class="label">Sites w/ Staff Shortage</div><div class="value">${shortageSites.length}</div></div>
       <div class="stat-card ${openComplaints?'warn':'ok'}"><div class="label">Open Complaints</div><div class="value">${openComplaints}</div></div>
@@ -777,16 +774,12 @@ async function renderDashboard(el){
         <p style="font-size:13px; color:var(--text-mid); line-height:1.6;">
           Click the mic (bottom right) and ask things like:<br>
           <span style="color:var(--text-hi);">"Which sites have staff shortages?"</span><br>
-          ${currentUser ? `<span style="color:var(--text-hi);">"Any open complaints?"</span><br>
+          <span style="color:var(--text-hi);">"Any open complaints?"</span><br>
           <span style="color:var(--text-hi);">"What contracts are expiring soon?"</span><br>
-          <span style="color:var(--text-hi);">"What's today's visit schedule?"</span>` : `<span style="color:var(--text-dim);">Sign in to ask about complaints, contracts, and visit schedules.</span>`}
+          <span style="color:var(--text-hi);">"What's today's visit schedule?"</span>
         </p>
       </div>
     </div>`;
-  if(!currentUser){
-    const btn = document.getElementById('dashSignInBtn');
-    if(btn) btn.onclick = showLoginScreen;
-  }
 }
 
 // ---------- specific renderers ----------
@@ -1385,7 +1378,7 @@ function openLinkGenerator(sites){
     <div id="lg_copyResult" style="font-size:12px; color:var(--text-mid); min-height:16px;"></div>
     <p class="hint">Email this link to your client. They fill it out with no login — their submission appears in this tab automatically.
       This link points to a separate, minimal feedback page (not this app) — a customer can never reach your dashboard or any internal data from it, even by editing the URL.
-      <br><br><b>Note:</b> this link only works once the app is deployed (both pages live in the same <code>public/</code> folder of the Render project).</p>
+      <br><br><b>Note:</b> both <code>ops_command_center.html</code> and <code>feedback.html</code> need to be hosted together (e.g. on Netlify) for this link to work when the client clicks it.</p>
   `;
   document.getElementById('formModal').classList.add('show');
   document.getElementById('lg_site').onchange = (e)=>{
@@ -1741,6 +1734,7 @@ function speak(text){
 async function answerQuery(q){
   const query = q.toLowerCase();
   if(!sb) return "I'm not connected to your database yet. Please connect Supabase first.";
+  if(!currentUser) return "Please sign in first — this app is for internal staff only.";
   try{
     if(query.includes('shortage')){
       const { data, error } = await sb.rpc('get_dashboard_summary');
@@ -1748,9 +1742,6 @@ async function answerQuery(q){
       const short = (data && data.shortage_sites) || [];
       if(!short.length) return "No staff shortages right now. All sites are fully staffed.";
       return `${short.length} site${short.length>1?'s have':' has'} a shortage: ` + short.map(s=>`${s.site_name}, short by ${s.shortage}`).join('; ') + '.';
-    }
-    if(!currentUser){
-      return "I can share the public shortage summary as a guest. Sign in to ask about complaints, contracts, visit schedules, or staff counts.";
     }
     if(query.includes('complaint')){
       const { data } = await sb.from('client_complaints').select('*, sites(site_name)').neq('status','closed');
