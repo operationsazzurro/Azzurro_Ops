@@ -197,10 +197,10 @@
   ::-webkit-scrollbar-thumb{background:rgba(120,200,255,0.2); border-radius:8px;}
 
   /* ---------- Org chart tree ---------- */
-  .org-chart-wrap{overflow-x:auto; overflow-y:hidden; padding:10px 0 30px; cursor:grab; user-select:none;}
+  .org-chart-wrap{overflow-x:auto; overflow-y:visible; padding:10px 0 30px; cursor:grab; user-select:none;}
   .org-chart-wrap.dragging{ cursor:grabbing; }
   .org-tree, .org-tree ul{
-    display:flex; justify-content:center; padding-top:28px; position:relative;
+    display:flex; justify-content:center; align-items:flex-start; padding-top:28px; position:relative;
   }
   .org-tree ul{ padding-top:28px; }
   .org-tree li{
