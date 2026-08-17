@@ -129,6 +129,14 @@
     padding:9px 11px; font-family:'Inter',sans-serif; font-size:13px; outline:none;
   }
   input:focus, select:focus, textarea:focus{border-color:var(--panel-border-strong);}
+  select{ color-scheme: dark; }
+  select option{ background-color:#0b1424; color:var(--text-hi); }
+  input[type="date"], input[type="month"]{ color-scheme: dark; }
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="month"]::-webkit-calendar-picker-indicator{
+    filter: invert(1) brightness(1.3);
+    cursor:pointer;
+  }
   .search-box{min-width:220px;}
 
   /* Voice dock */
@@ -189,7 +197,8 @@
   ::-webkit-scrollbar-thumb{background:rgba(120,200,255,0.2); border-radius:8px;}
 
   /* ---------- Org chart tree ---------- */
-  .org-chart-wrap{overflow-x:auto; overflow-y:hidden; padding:10px 0 30px;}
+  .org-chart-wrap{overflow-x:auto; overflow-y:hidden; padding:10px 0 30px; cursor:grab; user-select:none;}
+  .org-chart-wrap.dragging{ cursor:grabbing; }
   .org-tree, .org-tree ul{
     display:flex; justify-content:center; padding-top:28px; position:relative;
   }
@@ -635,6 +644,39 @@ async function renderOrgChart(el){
     });
   };
   if(writeOk) document.getElementById('addOrgBtn').onclick = ()=> openOrgForm(rows);
+  enableDragToPan(el.querySelector('.org-chart-wrap'));
+}
+
+function enableDragToPan(wrap){
+  if(!wrap) return;
+  let isDown = false, startX = 0, startScroll = 0, moved = false;
+  wrap.addEventListener('mousedown', (e)=>{
+    // ignore drags starting on interactive elements so clicks/edits still work
+    if(e.target.closest('button, input, a, [data-toggle], [data-edit], [data-remove]')) return;
+    isDown = true; moved = false;
+    startX = e.pageX;
+    startScroll = wrap.scrollLeft;
+    wrap.classList.add('dragging');
+  });
+  window.addEventListener('mousemove', (e)=>{
+    if(!isDown) return;
+    const dx = e.pageX - startX;
+    if(Math.abs(dx) > 3) moved = true;
+    wrap.scrollLeft = startScroll - dx;
+  });
+  window.addEventListener('mouseup', ()=>{
+    if(!isDown) return;
+    isDown = false;
+    wrap.classList.remove('dragging');
+    if(moved){
+      // swallow the click that follows a real drag so it doesn't trigger node toggles
+      const suppressClick = (e)=>{ e.stopPropagation(); e.preventDefault(); wrap.removeEventListener('click', suppressClick, true); };
+      wrap.addEventListener('click', suppressClick, true);
+    }
+  });
+  wrap.addEventListener('mouseleave', ()=>{
+    if(isDown){ isDown = false; wrap.classList.remove('dragging'); }
+  });
 }
 
 async function deleteOrgPerson(id, person){
@@ -1218,22 +1260,22 @@ async function renderFeedback(el){
   el.innerHTML = `<div class="panel"><div class="toolbar">
     <div class="panel-title" style="margin:0;">Customer Feedback (${rows.length})</div>
     ${writeOk ? `<div style="display:flex; gap:8px; flex-wrap:wrap;">
-      <button class="btn" id="importFeedbackBtn">⬆ Import CSV (Google Forms)</button>
       <button class="btn" id="linkBtn">🔗 Generate Feedback Link</button>
       <button class="btn btn-primary" id="addFeedbackBtn">+ Add Feedback</button>
     </div>` : ''}</div>
-    <p class="hint" style="margin-bottom:12px;">Hardcopy forms your team receives can be entered manually. A generated link auto-appears here on submit. Or collect via Google Forms and import the CSV export — no hosting required for that route.</p>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Period</th><th>Site</th><th>Client</th><th>Via</th><th>Overall</th><th></th>${writeOk?'<th></th>':''}</tr></thead>
+    <p class="hint" style="margin-bottom:12px;">Hardcopy forms your team receives can be entered manually. A generated link auto-appears here on submit.</p>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Period</th><th>Site</th><th>Client</th><th>Via</th><th>Overall</th><th></th><th></th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>`<tr>
         <td>${fmtDate(r.reporting_period)}</td>
         <td>${esc(r.sites?.site_name||'—')}</td>
         <td>${esc(r.client_name)||'—'}</td>
         <td><span class="badge ${r.submitted_via==='online'?'done':'progress'}">${r.submitted_via}</span></td>
         <td>${avgRatingLabel(r.customer_feedback_ratings)}</td>
+        <td>${r.areas_of_improvement && r.areas_of_improvement.trim() ? `<span class="badge progress" title="${esc(r.areas_of_improvement)}">⚠ Improvement noted</span>` : ''}</td>
         <td><button class="icon-btn" data-view-idx="${i}" title="View details">👁</button></td>
         ${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button></td>`:''}
       </tr>`).join('')
-      : `<tr class="empty-row"><td colspan="${writeOk?7:6}">No feedback logged yet.</td></tr>`}</tbody></table></div></div>`;
+      : `<tr class="empty-row"><td colspan="${writeOk?8:7}">No feedback logged yet.</td></tr>`}</tbody></table></div></div>`;
 
   el.querySelectorAll('[data-view-idx]').forEach(btn=>{
     btn.onclick = ()=> viewFeedbackDetail(rows[Number(btn.dataset.viewIdx)]);
@@ -1245,11 +1287,6 @@ async function renderFeedback(el){
     const { data: sites, error: sErr } = await sb.from('sites').select('id, site_name').order('site_name');
     if(sErr){ alert('Could not load sites: '+sErr.message); return; }
     openFeedbackForm(sites||[]);
-  };
-  document.getElementById('importFeedbackBtn').onclick = async ()=>{
-    const { data: sites, error: sErr } = await sb.from('sites').select('id, site_name').order('site_name');
-    if(sErr){ alert('Could not load sites: '+sErr.message); return; }
-    openFeedbackImportModal(sites||[]);
   };
   el.querySelectorAll('[data-edit-idx]').forEach(btn=>{
     btn.onclick = async ()=>{
@@ -1405,95 +1442,6 @@ function openLinkGenerator(sites){
     document.getElementById('formModal').classList.remove('show');
     document.getElementById('saveForm').textContent = 'Save';
   };
-}
-
-function feedbackCsvColumns(){
-  const base = ['site_name','client_name','designation','reporting_month','feedback_date','areas_of_improvement'];
-  const perArea = FEEDBACK_AREAS.flatMap(a=>[`${a} Rating`, `${a} Remarks`]);
-  return { base, perArea, all: [base[0],base[1],base[2],base[3],base[4], ...perArea, base[5]] };
-}
-
-function openFeedbackImportModal(sites){
-  const cols = feedbackCsvColumns();
-  bulkContext = {
-    table: 'customer_feedback',
-    fields: [],
-    customHandler: ()=> importFeedbackCSV(sites)
-  };
-  document.getElementById('bulkTitle').textContent = 'Bulk Import — Customer Feedback (Google Forms export)';
-  document.getElementById('bulkHint').textContent =
-    'CSV header row must use these exact column names: ' + cols.all.join(', ') +
-    '. reporting_month uses YYYY-MM. Rating values must be exactly: ' + RATING_OPTIONS.join(', ') + '.';
-  document.getElementById('bulkReference').innerHTML = buildReferenceHTML({
-    title: 'Existing Sites — "site_name" in your CSV must match one of these exactly (case-insensitive). Click ⧉ to copy the exact spelling.',
-    idColumnName: 'site_name',
-    rows: sites.map(s=>({ id:s.site_name, label:s.site_name }))
-  });
-  document.getElementById('bulkFile').value = '';
-  document.getElementById('bulkPaste').value = '';
-  document.getElementById('bulkResult').textContent = '';
-  document.getElementById('bulkModal').classList.add('show');
-}
-
-async function importFeedbackCSV(sites){
-  const resultEl = document.getElementById('bulkResult');
-  const text = document.getElementById('bulkPaste').value.trim();
-  if(!text){ resultEl.textContent = 'Please upload or paste CSV data first.'; resultEl.style.color = 'var(--red)'; return; }
-  if(typeof Papa === 'undefined'){ resultEl.textContent = 'CSV parser failed to load — check your internet connection and reload.'; resultEl.style.color = 'var(--red)'; return; }
-
-  const parsed = Papa.parse(text, { header:true, skipEmptyLines:true, transformHeader: h => h.trim() });
-  if(parsed.errors && parsed.errors.length){
-    resultEl.textContent = 'CSV parse error: ' + parsed.errors[0].message; resultEl.style.color = 'var(--red)'; return;
-  }
-
-  const siteByName = {};
-  sites.forEach(s => siteByName[s.site_name.trim().toLowerCase()] = s.id);
-
-  const rows = parsed.data;
-  let success = 0, failed = 0, firstError = '';
-  for(let i=0; i<rows.length; i++){
-    const row = rows[i];
-    const siteName = (row['site_name']||'').trim();
-    const siteId = siteByName[siteName.toLowerCase()];
-    if(!siteId){ failed++; if(!firstError) firstError = `Row ${i+1}: site "${siteName}" not found`; continue; }
-    const period = (row['reporting_month']||'').trim();
-    if(!period){ failed++; if(!firstError) firstError = `Row ${i+1}: missing reporting_month`; continue; }
-
-    const header = {
-      site_id: siteId,
-      reporting_period: period.length === 7 ? period + '-01' : period,
-      client_name: row['client_name'] || null,
-      designation: row['designation'] || null,
-      feedback_date: row['feedback_date'] || null,
-      areas_of_improvement: row['areas_of_improvement'] || null,
-      submitted_via: 'online',
-    };
-    const { data: inserted, error: insErr } = await sb.from('customer_feedback').insert(header).select().single();
-    if(insErr){ failed++; if(!firstError) firstError = `Row ${i+1}: ${insErr.message}`; continue; }
-
-    const ratingRows = FEEDBACK_AREAS.map(area=>{
-      const rating = (row[`${area} Rating`] || '').trim();
-      const remarks = (row[`${area} Remarks`] || '').trim();
-      if(!rating && !remarks) return null;
-      return { feedback_id: inserted.id, area, rating: rating || null, remarks: remarks || null };
-    }).filter(Boolean);
-    if(ratingRows.length){
-      const { error: rErr } = await sb.from('customer_feedback_ratings').insert(ratingRows);
-      if(rErr && !firstError) firstError = `Row ${i+1}: header saved but ratings failed — ${rErr.message}`;
-    }
-    success++;
-    resultEl.style.color = 'var(--text-mid)';
-    resultEl.textContent = `Importing… ${i+1} / ${rows.length} processed.`;
-  }
-
-  if(failed === 0){
-    resultEl.style.color = 'var(--cyan-bright)';
-    resultEl.textContent = `Done — ${success} feedback record(s) imported.`;
-    setTimeout(()=>{ document.getElementById('bulkModal').classList.remove('show'); renderContent(); }, 1200);
-  } else {
-    resultEl.style.color = 'var(--red)';
-    resultEl.textContent = `${success} imported, ${failed} failed. First issue: ${firstError}`;
-  }
 }
 
 async function renderUsers(el){
