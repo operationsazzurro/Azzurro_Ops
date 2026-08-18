@@ -189,6 +189,25 @@
   @media (max-width:480px){
     .chat-panel{ width:calc(100vw - 28px); height:60vh; }
   }
+  .hermes-settings-modal{
+    display:none; position:fixed; inset:0; z-index:200; align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.55); padding:16px;
+  }
+  .hermes-settings-modal.show{display:flex;}
+  .hermes-settings-panel{
+    width:420px; max-width:100%; max-height:86vh; overflow-y:auto; background:var(--bg-1);
+    border:1px solid var(--panel-border-strong); border-radius:16px; padding:22px;
+  }
+  .hermes-settings-panel h3{margin:0 0 14px; font-family:'Space Grotesk',sans-serif; font-size:16px;}
+  .model-option{
+    display:flex; justify-content:space-between; gap:10px; padding:9px 10px; border-radius:8px; cursor:pointer;
+    border:1px solid transparent; font-size:12.5px;
+  }
+  .model-option:hover{background:rgba(255,255,255,0.04);}
+  .model-option.selected{border-color:var(--cyan); background:rgba(94,234,212,0.08); color:var(--cyan-bright);}
+  .model-option .model-price{color:var(--text-dim); font-size:11px; white-space:nowrap;}
+  .model-list{max-height:220px; overflow-y:auto; border:1px solid var(--panel-border); border-radius:8px; margin-top:6px;}
+  .model-list-empty{padding:14px; text-align:center; color:var(--text-dim); font-size:12px;}
 
   /* Modal */
   .modal-backdrop{position:fixed; inset:0; background:rgba(0,0,0,0.6); backdrop-filter: blur(4px); display:none; align-items:center; justify-content:center; z-index:100;}
@@ -404,6 +423,25 @@
       <line x1="12" y1="19" x2="12" y2="23"/>
       <line x1="8" y1="23" x2="16" y2="23"/>
     </svg>
+  </div>
+</div>
+
+<div class="hermes-settings-modal" id="hermesSettingsModal">
+  <div class="hermes-settings-panel">
+    <h3>Hermes Connection</h3>
+    <div class="field"><label>Hermes API URL</label><input id="hs_url" type="text" placeholder="https://your-app.onrender.com"></div>
+    <div class="field"><label>API Server Key</label><input id="hs_key" type="password" placeholder="Bearer key"></div>
+    <div class="field">
+      <label>Model (via OpenRouter)</label>
+      <input id="hs_modelSearch" type="text" placeholder="Search models... e.g. haiku, gpt, gemini">
+      <div class="model-list" id="hs_modelList"><div class="model-list-empty">Loading models…</div></div>
+      <p class="hint" id="hs_selectedModelLabel" style="margin-top:6px;">No model selected — Hermes will use its own default.</p>
+    </div>
+    <div id="hs_error" class="error"></div>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <button class="btn" id="hs_cancel" style="width:auto; flex:1;">Cancel</button>
+      <button class="btn btn-primary" id="hs_save" style="flex:1;">Save</button>
+    </div>
   </div>
 </div>
 
@@ -1749,16 +1787,96 @@ function getHermesConfig(){
 function setHermesConfig(cfg){ localStorage.setItem(HERMES_CFG_KEY, JSON.stringify(cfg)); }
 
 function promptHermesSetup(){
-  const existing = getHermesConfig() || { url:'', key:'' };
-  const url = window.prompt(
-    "Hermes API base URL (e.g. http://your-server:8642 or https://your-domain):",
-    existing.url || ''
-  );
-  if(url === null) return;
-  const key = window.prompt("Hermes API_SERVER_KEY:", existing.key || '');
-  if(key === null) return;
-  setHermesConfig({ url: url.trim().replace(/\/+$/,''), key: key.trim() });
-  appendChatMsg('agent', url.trim() ? 'Connected. Ask me anything about your sites, complaints, feedback, or KPIs.' : 'Hermes URL cleared — I\'ll use the built-in canned answers for now.');
+  openHermesSettingsModal();
+}
+
+// ---------- Hermes settings modal (URL, key, model picker) ----------
+let hermesModelCache = null; // cached OpenRouter model list for this page session
+let hermesModelSelection = null; // model chosen but not yet saved
+
+async function fetchOpenRouterModels(){
+  if(hermesModelCache) return hermesModelCache;
+  try{
+    const res = await fetch('https://openrouter.ai/api/v1/models');
+    if(!res.ok) throw new Error('bad response');
+    const data = await res.json();
+    hermesModelCache = (data.data || []).map(m=>({
+      id: m.id,
+      name: m.name || m.id,
+      promptPrice: m.pricing?.prompt ? Number(m.pricing.prompt) * 1000000 : null,
+      completionPrice: m.pricing?.completion ? Number(m.pricing.completion) * 1000000 : null,
+    })).sort((a,b)=> a.name.localeCompare(b.name));
+  }catch(e){
+    // Fallback list if OpenRouter's model API can't be reached from here
+    hermesModelCache = [
+      { id:'anthropic/claude-3.5-haiku', name:'Claude 3.5 Haiku', promptPrice:0.8, completionPrice:4 },
+      { id:'anthropic/claude-haiku-4.5', name:'Claude Haiku 4.5', promptPrice:1, completionPrice:5 },
+      { id:'openai/gpt-4o-mini', name:'GPT-4o Mini', promptPrice:0.15, completionPrice:0.6 },
+      { id:'google/gemini-2.0-flash-001', name:'Gemini 2.0 Flash', promptPrice:0.1, completionPrice:0.4 },
+      { id:'z-ai/glm-5.2', name:'GLM 5.2', promptPrice:0.5, completionPrice:1.4 },
+    ];
+  }
+  return hermesModelCache;
+}
+
+function renderModelList(models, selectedId){
+  const listEl = document.getElementById('hs_modelList');
+  if(!models.length){ listEl.innerHTML = '<div class="model-list-empty">No models match your search.</div>'; return; }
+  listEl.innerHTML = models.slice(0, 60).map(m=>{
+    const price = m.promptPrice != null ? `$${m.promptPrice.toFixed(2)}/M in` : '';
+    return `<div class="model-option ${m.id===selectedId?'selected':''}" data-model-id="${esc(m.id)}">
+      <span>${esc(m.name)}</span><span class="model-price">${price}</span>
+    </div>`;
+  }).join('');
+  listEl.querySelectorAll('[data-model-id]').forEach(el=>{
+    el.onclick = ()=>{
+      hermesModelSelection = el.dataset.modelId;
+      listEl.querySelectorAll('.model-option').forEach(o=>o.classList.remove('selected'));
+      el.classList.add('selected');
+      document.getElementById('hs_selectedModelLabel').textContent = 'Selected: ' + hermesModelSelection;
+    };
+  });
+}
+
+async function openHermesSettingsModal(){
+  const modal = document.getElementById('hermesSettingsModal');
+  const existing = getHermesConfig() || { url:'', key:'', model:'' };
+  document.getElementById('hs_url').value = existing.url || '';
+  document.getElementById('hs_key').value = existing.key || '';
+  document.getElementById('hs_error').textContent = '';
+  hermesModelSelection = existing.model || null;
+  document.getElementById('hs_selectedModelLabel').textContent = hermesModelSelection
+    ? 'Selected: ' + hermesModelSelection
+    : 'No model selected — Hermes will use its own default.';
+  document.getElementById('hs_modelSearch').value = '';
+  modal.classList.add('show');
+
+  const models = await fetchOpenRouterModels();
+  renderModelList(models, hermesModelSelection);
+
+  document.getElementById('hs_modelSearch').oninput = (e)=>{
+    const q = e.target.value.trim().toLowerCase();
+    const filtered = q ? models.filter(m=> m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)) : models;
+    renderModelList(filtered, hermesModelSelection);
+  };
+}
+
+function initHermesSettingsModal(){
+  const modal = document.getElementById('hermesSettingsModal');
+  document.getElementById('hs_cancel').onclick = ()=> modal.classList.remove('show');
+  document.getElementById('hs_save').onclick = ()=>{
+    const url = document.getElementById('hs_url').value.trim().replace(/\/+$/,'');
+    const key = document.getElementById('hs_key').value.trim();
+    if(url && !/^https?:\/\//i.test(url)){
+      document.getElementById('hs_error').textContent = 'URL must start with http:// or https://';
+      return;
+    }
+    setHermesConfig({ url, key, model: hermesModelSelection || '' });
+    modal.classList.remove('show');
+    appendChatMsg('agent', url
+      ? `Connected${hermesModelSelection ? ' — using ' + hermesModelSelection : ''}. Ask me anything about your sites, complaints, feedback, or KPIs.`
+      : 'Hermes URL cleared — I\'ll use the built-in canned answers for now.');
+  };
 }
 
 const chatHistory = [];
@@ -1778,7 +1896,7 @@ async function callHermes(userText){
         ...(cfg.key ? { 'Authorization':'Bearer ' + cfg.key } : {})
       },
       body: JSON.stringify({
-        model:'hermes',
+        model: cfg.model || 'anthropic/claude-3.5-haiku',
         messages:[
           { role:'system', content:'You are the AI assistant embedded in the SoftService Ops Command Center. Answer concisely using your connected tools for live data (sites, complaints, feedback, contracts, KPIs) whenever relevant.' },
           ...chatHistory.slice(-10)
@@ -1829,6 +1947,7 @@ async function sendChatMessage(){
   }
 }
 
+let chatWidgetInitialized = false;
 function initChatWidget(){
   const toggleBtn = document.getElementById('chatToggleBtn');
   const panel = document.getElementById('chatPanel');
@@ -1837,11 +1956,15 @@ function initChatWidget(){
   const sendBtn = document.getElementById('chatSendBtn');
   const input = document.getElementById('chatInput');
 
+  if(chatWidgetInitialized) return;
+  chatWidgetInitialized = true;
+
   toggleBtn.onclick = ()=>{ panel.classList.toggle('show'); if(panel.classList.contains('show')) input.focus(); };
   closeBtn.onclick = ()=> panel.classList.remove('show');
   settingsBtn.onclick = promptHermesSetup;
   sendBtn.onclick = sendChatMessage;
   input.onkeydown = (e)=>{ if(e.key === 'Enter') sendChatMessage(); };
+  initHermesSettingsModal();
 
   if(!getHermesConfig()){
     appendChatMsg('agent', 'Tip: click ⚙ above to connect your Hermes server for full data access and automation.');
