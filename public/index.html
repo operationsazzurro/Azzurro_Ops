@@ -166,6 +166,30 @@
   @keyframes pulse{0%,100%{box-shadow:0 0 24px rgba(94,234,212,0.2);} 50%{box-shadow:0 0 40px rgba(94,234,212,0.5);}}
   @keyframes ring{0%{transform:scale(0.9); opacity:0.9;} 100%{transform:scale(1.6); opacity:0;}}
 
+  .chat-panel{
+    display:none; flex-direction:column; width:340px; height:440px;
+    background:rgba(6,10,18,0.96); border:1px solid var(--panel-border-strong); border-radius:14px;
+    backdrop-filter: blur(16px); overflow:hidden; box-shadow:0 12px 40px rgba(0,0,0,0.5);
+  }
+  .chat-panel.show{display:flex;}
+  .chat-panel-head{
+    display:flex; align-items:center; justify-content:space-between; padding:12px 14px;
+    border-bottom:1px solid var(--panel-border); font-size:13px; font-weight:600; color:var(--text-hi);
+  }
+  .chat-panel-head .icon-btn{background:transparent; border:none; color:var(--text-dim); cursor:pointer; font-size:13px; padding:2px 6px;}
+  .chat-panel-head .icon-btn:hover{color:var(--text-hi);}
+  .chat-panel-body{flex:1; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px;}
+  .chat-msg{font-size:12.5px; line-height:1.5; padding:9px 11px; border-radius:10px; max-width:88%; white-space:pre-wrap;}
+  .chat-msg-agent{background:rgba(120,150,255,0.1); border:1px solid rgba(120,150,255,0.2); color:var(--text-hi); align-self:flex-start;}
+  .chat-msg-user{background:rgba(94,234,212,0.1); border:1px solid rgba(94,234,212,0.25); color:var(--text-hi); align-self:flex-end;}
+  .chat-msg-error{background:rgba(255,107,129,0.1); border:1px solid rgba(255,107,129,0.3); color:var(--red); align-self:flex-start;}
+  .chat-panel-input{display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--panel-border);}
+  .chat-panel-input input{flex:1; font-size:12.5px; padding:8px 10px;}
+  .chat-panel-input button{width:auto; margin-top:0; padding:8px 14px; font-size:12.5px;}
+  @media (max-width:480px){
+    .chat-panel{ width:calc(100vw - 28px); height:60vh; }
+  }
+
   /* Modal */
   .modal-backdrop{position:fixed; inset:0; background:rgba(0,0,0,0.6); backdrop-filter: blur(4px); display:none; align-items:center; justify-content:center; z-index:100;}
   .modal-backdrop.show{display:flex;}
@@ -197,15 +221,16 @@
   ::-webkit-scrollbar-thumb{background:rgba(120,200,255,0.2); border-radius:8px;}
 
   /* ---------- Org chart tree ---------- */
-  .org-chart-wrap{overflow-x:auto; overflow-y:visible; padding:10px 0 30px; cursor:grab; user-select:none;}
+  .org-chart-wrap{overflow-x:auto; overflow-y:visible; padding:10px 0 30px; cursor:grab; user-select:none; -webkit-overflow-scrolling:touch; touch-action:pan-x pan-y; width:100%;}
   .org-chart-wrap.dragging{ cursor:grabbing; }
   .org-tree, .org-tree ul{
     display:flex; justify-content:center; align-items:flex-start; padding-top:28px; position:relative;
+    width:max-content; min-width:100%;
   }
-  .org-tree ul{ padding-top:28px; }
+  .org-tree ul{ padding-top:28px; width:max-content; min-width:0; }
   .org-tree li{
     list-style:none; position:relative; padding:28px 12px 0 12px;
-    display:flex; flex-direction:column; align-items:center; transition:.2s;
+    display:flex; flex-direction:column; align-items:center; transition:.2s; flex-shrink:0;
   }
   .org-tree li::before, .org-tree li::after{
     content:''; position:absolute; top:0; right:50%; width:50%; height:28px;
@@ -347,9 +372,30 @@
 </div>
 
 <div class="voice-dock" id="voiceDock">
+  <div class="chat-panel" id="chatPanel">
+    <div class="chat-panel-head">
+      <span>Hermes Assistant</span>
+      <div style="display:flex; gap:4px;">
+        <button class="icon-btn" id="chatSettingsBtn" title="Configure Hermes connection">⚙</button>
+        <button class="icon-btn" id="chatCloseBtn" title="Close">✕</button>
+      </div>
+    </div>
+    <div class="chat-panel-body" id="chatPanelBody">
+      <div class="chat-msg chat-msg-agent">Hi! Once Hermes is connected (⚙ to configure), I can answer questions about your sites, complaints, feedback, KPIs and contracts, and even log things for you.</div>
+    </div>
+    <div class="chat-panel-input">
+      <input id="chatInput" type="text" placeholder="Ask about sites, complaints, KPIs...">
+      <button class="btn btn-primary" id="chatSendBtn">Send</button>
+    </div>
+  </div>
   <div class="voice-transcript" id="voiceBox">
     <div id="voiceHeard"></div>
     <div class="answer" id="voiceAnswer"></div>
+  </div>
+  <div class="mic-btn" id="chatToggleBtn" title="Chat with Hermes" style="background:radial-gradient(circle at 35% 30%, rgba(120,150,255,0.35), rgba(120,150,255,0.08)); border-color:rgba(120,150,255,0.4);">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#a8c0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+    </svg>
   </div>
   <div class="mic-btn" id="micBtn" title="Ask by voice">
     <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -649,7 +695,8 @@ async function renderOrgChart(el){
 
 function enableDragToPan(wrap){
   if(!wrap) return;
-  let isDown = false, startX = 0, startScroll = 0, moved = false;
+  let isDown = false, startX = 0, startY = 0, startScroll = 0, moved = false;
+
   wrap.addEventListener('mousedown', (e)=>{
     // ignore drags starting on interactive elements so clicks/edits still work
     if(e.target.closest('button, input, a, [data-toggle], [data-edit], [data-remove]')) return;
@@ -676,6 +723,34 @@ function enableDragToPan(wrap){
   });
   wrap.addEventListener('mouseleave', ()=>{
     if(isDown){ isDown = false; wrap.classList.remove('dragging'); }
+  });
+
+  // Touch support (mobile/tablet) - mirrors the mouse logic above.
+  // Native overflow-x:auto usually handles swipe-scroll on its own, but
+  // some embedded/webview contexts (in-app browsers, PWAs) don't pass
+  // touch gestures through reliably, so we drive it manually too.
+  wrap.addEventListener('touchstart', (e)=>{
+    if(e.target.closest('button, input, a, [data-toggle], [data-edit], [data-remove]')) return;
+    const t = e.touches[0];
+    isDown = true; moved = false;
+    startX = t.pageX; startY = t.pageY;
+    startScroll = wrap.scrollLeft;
+  }, { passive:true });
+  wrap.addEventListener('touchmove', (e)=>{
+    if(!isDown) return;
+    const t = e.touches[0];
+    const dx = t.pageX - startX;
+    const dy = t.pageY - startY;
+    // only take over once the gesture is clearly more horizontal than
+    // vertical, so the page can still scroll vertically as normal
+    if(!moved && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 6) moved = true;
+    if(moved){
+      wrap.scrollLeft = startScroll - dx;
+      if(e.cancelable) e.preventDefault();
+    }
+  }, { passive:false });
+  wrap.addEventListener('touchend', ()=>{
+    isDown = false;
   });
 }
 
@@ -1664,6 +1739,115 @@ document.getElementById('doBulkImport').onclick = async ()=>{
   }
 };
 
+// ---------- Hermes chat assistant ----------
+const HERMES_CFG_KEY = 'hermes_agent_config';
+
+function getHermesConfig(){
+  try{ return JSON.parse(localStorage.getItem(HERMES_CFG_KEY) || 'null'); }
+  catch(e){ return null; }
+}
+function setHermesConfig(cfg){ localStorage.setItem(HERMES_CFG_KEY, JSON.stringify(cfg)); }
+
+function promptHermesSetup(){
+  const existing = getHermesConfig() || { url:'', key:'' };
+  const url = window.prompt(
+    "Hermes API base URL (e.g. http://your-server:8642 or https://your-domain):",
+    existing.url || ''
+  );
+  if(url === null) return;
+  const key = window.prompt("Hermes API_SERVER_KEY:", existing.key || '');
+  if(key === null) return;
+  setHermesConfig({ url: url.trim().replace(/\/+$/,''), key: key.trim() });
+  appendChatMsg('agent', url.trim() ? 'Connected. Ask me anything about your sites, complaints, feedback, or KPIs.' : 'Hermes URL cleared — I\'ll use the built-in canned answers for now.');
+}
+
+const chatHistory = [];
+
+async function callHermes(userText){
+  const cfg = getHermesConfig();
+  if(!cfg || !cfg.url){
+    // Fall back to the existing lightweight keyword-based answers
+    return answerQuery(userText);
+  }
+  chatHistory.push({ role:'user', content:userText });
+  try{
+    const res = await fetch(cfg.url + '/v1/chat/completions', {
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        ...(cfg.key ? { 'Authorization':'Bearer ' + cfg.key } : {})
+      },
+      body: JSON.stringify({
+        model:'hermes',
+        messages:[
+          { role:'system', content:'You are the AI assistant embedded in the SoftService Ops Command Center. Answer concisely using your connected tools for live data (sites, complaints, feedback, contracts, KPIs) whenever relevant.' },
+          ...chatHistory.slice(-10)
+        ]
+      })
+    });
+    if(!res.ok){
+      const t = await res.text().catch(()=> '');
+      throw new Error(`Hermes returned ${res.status}${t ? ' — ' + t.slice(0,200) : ''}`);
+    }
+    const data = await res.json();
+    const reply = data.choices?.[0]?.message?.content || '(no response)';
+    chatHistory.push({ role:'assistant', content:reply });
+    return reply;
+  }catch(e){
+    throw new Error('Could not reach Hermes: ' + (e.message || e) + '. Falling back to built-in answers below.');
+  }
+}
+
+function appendChatMsg(role, text){
+  const body = document.getElementById('chatPanelBody');
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + (role==='user' ? 'chat-msg-user' : role==='error' ? 'chat-msg-error' : 'chat-msg-agent');
+  div.textContent = text;
+  body.appendChild(div);
+  body.scrollTop = body.scrollHeight;
+}
+
+async function sendChatMessage(){
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if(!text) return;
+  input.value = '';
+  appendChatMsg('user', text);
+  const thinking = document.createElement('div');
+  thinking.className = 'chat-msg chat-msg-agent';
+  thinking.textContent = 'Thinking...';
+  document.getElementById('chatPanelBody').appendChild(thinking);
+  document.getElementById('chatPanelBody').scrollTop = 999999;
+  try{
+    const reply = await callHermes(text);
+    thinking.textContent = reply;
+  }catch(e){
+    thinking.remove();
+    appendChatMsg('error', e.message || String(e));
+    const fallback = await answerQuery(text);
+    appendChatMsg('agent', fallback);
+  }
+}
+
+function initChatWidget(){
+  const toggleBtn = document.getElementById('chatToggleBtn');
+  const panel = document.getElementById('chatPanel');
+  const closeBtn = document.getElementById('chatCloseBtn');
+  const settingsBtn = document.getElementById('chatSettingsBtn');
+  const sendBtn = document.getElementById('chatSendBtn');
+  const input = document.getElementById('chatInput');
+
+  toggleBtn.onclick = ()=>{ panel.classList.toggle('show'); if(panel.classList.contains('show')) input.focus(); };
+  closeBtn.onclick = ()=> panel.classList.remove('show');
+  settingsBtn.onclick = promptHermesSetup;
+  sendBtn.onclick = sendChatMessage;
+  input.onkeydown = (e)=>{ if(e.key === 'Enter') sendChatMessage(); };
+
+  if(!getHermesConfig()){
+    appendChatMsg('agent', 'Tip: click ⚙ above to connect your Hermes server for full data access and automation.');
+  }
+}
+
 // ---------- voice ----------
 const micBtn = document.getElementById('micBtn');
 const voiceBox = document.getElementById('voiceBox');
@@ -1738,7 +1922,9 @@ function initVoice(){
     const transcript = event.results[0][0].transcript;
     voiceHeard.textContent = '"' + transcript + '"';
     voiceAnswer.textContent = 'Thinking...';
-    const answer = await answerQuery(transcript);
+    let answer;
+    try{ answer = await callHermes(transcript); }
+    catch(e){ answer = await answerQuery(transcript); }
     voiceAnswer.textContent = answer;
     speak(answer);
   };
@@ -1777,6 +1963,7 @@ async function bootGuest(){
   currentTab = 'dashboard';
   renderTabs();
   initVoice();
+  initChatWidget();
   await checkConnection();
   renderContent();
 }
@@ -1787,6 +1974,8 @@ async function bootAfterLogin(){
   updateUserBadge();
   renderTabs();
   renderContent();
+  initVoice();
+  initChatWidget();
 }
 
 function showLoginScreen(){
