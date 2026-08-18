@@ -1872,6 +1872,7 @@ function initHermesSettingsModal(){
       return;
     }
     setHermesConfig({ url, key, model: hermesModelSelection || '' });
+    hermesModelApplied = null; // force re-priming with /model on next message
     modal.classList.remove('show');
     appendChatMsg('agent', url
       ? `Connected${hermesModelSelection ? ' — using ' + hermesModelSelection : ''}. Ask me anything about your sites, complaints, feedback, or KPIs.`
@@ -1880,6 +1881,24 @@ function initHermesSettingsModal(){
 }
 
 const chatHistory = [];
+let hermesModelApplied = null; // tracks which model we've already told the live Hermes session to switch to
+
+async function sendRawToHermes(cfg, messages){
+  const res = await fetch(cfg.url + '/v1/chat/completions', {
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      ...(cfg.key ? { 'Authorization':'Bearer ' + cfg.key } : {})
+    },
+    body: JSON.stringify({ model: cfg.model || undefined, messages })
+  });
+  if(!res.ok){
+    const t = await res.text().catch(()=> '');
+    throw new Error(`Hermes returned ${res.status}${t ? ' — ' + t.slice(0,200) : ''}`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || '(no response)';
+}
 
 async function callHermes(userText){
   const cfg = getHermesConfig();
@@ -1887,28 +1906,22 @@ async function callHermes(userText){
     // Fall back to the existing lightweight keyword-based answers
     return answerQuery(userText);
   }
-  chatHistory.push({ role:'user', content:userText });
   try{
-    const res = await fetch(cfg.url + '/v1/chat/completions', {
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        ...(cfg.key ? { 'Authorization':'Bearer ' + cfg.key } : {})
-      },
-      body: JSON.stringify({
-        model: cfg.model || 'anthropic/claude-3.5-haiku',
-        messages:[
-          { role:'system', content:'You are the AI assistant embedded in the SoftService Ops Command Center. Answer concisely using your connected tools for live data (sites, complaints, feedback, contracts, KPIs) whenever relevant.' },
-          ...chatHistory.slice(-10)
-        ]
-      })
-    });
-    if(!res.ok){
-      const t = await res.text().catch(()=> '');
-      throw new Error(`Hermes returned ${res.status}${t ? ' — ' + t.slice(0,200) : ''}`);
+    // Hermes ignores the OpenAI-style "model" field on requests — it only
+    // switches models via its own /model slash command. If the user picked
+    // a different model in settings than what we've already applied to
+    // this live session, prime it once before sending the real question.
+    if(cfg.model && cfg.model !== hermesModelApplied){
+      await sendRawToHermes(cfg, [
+        { role:'user', content:`/model ${cfg.model} --provider openrouter` }
+      ]).catch(()=>{ /* even if this errors, still try the real question below */ });
+      hermesModelApplied = cfg.model;
     }
-    const data = await res.json();
-    const reply = data.choices?.[0]?.message?.content || '(no response)';
+    chatHistory.push({ role:'user', content:userText });
+    const reply = await sendRawToHermes(cfg, [
+      { role:'system', content:'You are the AI assistant embedded in the SoftService Ops Command Center. Answer concisely using your connected tools for live data (sites, complaints, feedback, contracts, KPIs) whenever relevant.' },
+      ...chatHistory.slice(-10)
+    ]);
     chatHistory.push({ role:'assistant', content:reply });
     return reply;
   }catch(e){
