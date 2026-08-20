@@ -1527,10 +1527,15 @@ function openFeedbackForm(sites, editingRow){
   const wrap = document.getElementById('formFields');
   const ratingsByArea = {};
   if(editingRow) (editingRow.customer_feedback_ratings||[]).forEach(r=> ratingsByArea[r.area] = r);
-  const siteOptions = sites.map(s=>`<option value="${s.id}" ${editingRow&&editingRow.site_id===s.id?'selected':''}>${esc(s.site_name)}</option>`).join('');
+  const preselectedSite = editingRow ? sites.find(s=>s.id===editingRow.site_id) : null;
   const periodVal = editingRow&&editingRow.reporting_period ? editingRow.reporting_period.slice(0,7) : '';
   wrap.innerHTML = `
-    <div class="field"><label>Site</label><select id="fb_site"><option value="">— Select site —</option>${siteOptions}</select></div>
+    <div class="field" style="position:relative;">
+      <label>Site</label>
+      <input id="fb_siteSearch" type="text" placeholder="Search sites..." autocomplete="off" value="${preselectedSite ? esc(preselectedSite.site_name) : ''}">
+      <input type="hidden" id="fb_site" value="${editingRow && editingRow.site_id ? editingRow.site_id : ''}">
+      <div id="fb_siteList" class="model-list" style="display:none; position:absolute; z-index:10; width:100%; background:var(--bg-1); margin-top:4px;"></div>
+    </div>
     <div class="field"><label>Reporting month</label><input id="fb_period" type="month" value="${periodVal}"></div>
     <div class="field"><label>Client name</label><input id="fb_client" type="text" value="${editingRow&&editingRow.client_name?esc(editingRow.client_name):''}"></div>
     <div class="field"><label>Designation</label><input id="fb_designation" type="text" value="${editingRow&&editingRow.designation?esc(editingRow.designation):''}"></div>
@@ -1551,6 +1556,43 @@ function openFeedbackForm(sites, editingRow){
     <div class="field"><label>Areas of Improvement</label><textarea id="fb_improvement" rows="3">${editingRow&&editingRow.areas_of_improvement?esc(editingRow.areas_of_improvement):''}</textarea></div>
   `;
   document.getElementById('formModal').classList.add('show');
+
+  // ---- searchable site dropdown ----
+  const searchInput = document.getElementById('fb_siteSearch');
+  const hiddenInput = document.getElementById('fb_site');
+  const listEl = document.getElementById('fb_siteList');
+
+  function renderSiteOptions(query){
+    const q = (query||'').trim().toLowerCase();
+    const matches = q ? sites.filter(s=> s.site_name.toLowerCase().includes(q)) : sites;
+    if(!matches.length){
+      listEl.innerHTML = '<div class="model-list-empty">No sites match.</div>';
+    } else {
+      listEl.innerHTML = matches.slice(0, 50).map(s=>`
+        <div class="model-option ${s.id===hiddenInput.value?'selected':''}" data-site-id="${s.id}">${esc(s.site_name)}</div>
+      `).join('');
+      listEl.querySelectorAll('[data-site-id]').forEach(opt=>{
+        opt.onclick = ()=>{
+          const site = sites.find(s=>s.id === opt.dataset.siteId);
+          hiddenInput.value = site.id;
+          searchInput.value = site.site_name;
+          listEl.style.display = 'none';
+        };
+      });
+    }
+    listEl.style.display = 'block';
+  }
+
+  searchInput.oninput = (e)=>{
+    hiddenInput.value = ''; // typing invalidates any prior selection until a match is clicked
+    renderSiteOptions(e.target.value);
+  };
+  searchInput.onfocus = ()=> renderSiteOptions(searchInput.value);
+  searchInput.addEventListener('blur', ()=>{
+    // slight delay so a click on an option registers before the list hides
+    setTimeout(()=>{ listEl.style.display = 'none'; }, 150);
+  });
+
   document.getElementById('saveForm').onclick = async ()=>{
     const siteId = document.getElementById('fb_site').value;
     const periodInput = document.getElementById('fb_period').value; // "YYYY-MM"
