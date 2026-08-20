@@ -91,19 +91,45 @@ const RATING_OPTIONS = ['Excellent','Very Good','Good','Fair'];
 function esc(s){ return (s===null||s===undefined) ? '' : String(s).replace(/</g,'&lt;'); }
 
 const params = new URLSearchParams(window.location.search);
-const siteId = params.get('site');
-const siteLabel = params.get('label');
+const shortCode = params.get('c');
+let siteId = params.get('site');       // legacy format, still supported
+let siteLabel = params.get('label');   // legacy format, still supported
 
 const body = document.getElementById('formBody');
 
-if(!siteId){
-  document.getElementById('siteLabel').textContent = '';
-  body.innerHTML = `<p style="text-align:center; color:var(--text-mid); font-size:13px; padding:20px 0;">
-    This feedback link is missing some information. Please use the link exactly as it was sent to you, or contact us for a new one.
-  </p>`;
-} else {
-  document.getElementById('siteLabel').textContent = siteLabel ? `For: ${siteLabel}` : '';
+async function resolveAndRender(){
   const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth:{ persistSession:false } }) : null;
+
+  if(shortCode){
+    if(!sb){
+      body.innerHTML = `<p style="text-align:center; color:var(--text-mid); font-size:13px; padding:20px 0;">Could not connect. Please reload the page and try again.</p>`;
+      return;
+    }
+    const { data, error } = await sb.from('feedback_links').select('site_id, label').eq('code', shortCode).maybeSingle();
+    if(error || !data){
+      document.getElementById('siteLabel').textContent = '';
+      body.innerHTML = `<p style="text-align:center; color:var(--text-mid); font-size:13px; padding:20px 0;">
+        This feedback link is invalid or has expired. Please contact us for a new one.
+      </p>`;
+      return;
+    }
+    siteId = data.site_id;
+    siteLabel = data.label;
+  }
+
+  if(!siteId){
+    document.getElementById('siteLabel').textContent = '';
+    body.innerHTML = `<p style="text-align:center; color:var(--text-mid); font-size:13px; padding:20px 0;">
+      This feedback link is missing some information. Please use the link exactly as it was sent to you, or contact us for a new one.
+    </p>`;
+    return;
+  }
+
+  renderForm(sb, siteId, siteLabel);
+}
+
+function renderForm(sb, siteId, siteLabel){
+  document.getElementById('siteLabel').textContent = siteLabel ? `For: ${siteLabel}` : '';
 
   body.innerHTML = `
     <p style="font-size:13px; color:var(--text-mid); line-height:1.6; margin-bottom:18px;">
@@ -169,6 +195,8 @@ if(!siteId){
     }
   };
 }
+
+resolveAndRender();
 </script>
 </body>
 </html>
