@@ -1590,7 +1590,10 @@ async function renderUsers(el){
   if(error) throw error;
   const rows = data || [];
   el.innerHTML = `<div class="panel">
-    <div class="panel-title">Users & Permissions (${rows.length})</div>
+    <div class="panel-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <span>Users & Permissions (${rows.length})</span>
+      <button class="btn btn-primary" id="addUserBtn" style="width:auto; margin-top:0;">+ Add User</button>
+    </div>
     <p class="hint" style="margin-bottom:14px;">
       <b>Admin</b> — full access, incl. managing users. &nbsp;
       <b>Editor</b> — can add, import, and edit data (your "custom selected users"). &nbsp;
@@ -1634,6 +1637,94 @@ async function renderUsers(el){
       openTabAccessForm(row);
     };
   });
+  document.getElementById('addUserBtn').onclick = openAddUserForm;
+}
+
+function openAddUserForm(){
+  resetFormModalButtons();
+  document.getElementById('formTitle').textContent = 'Add User';
+  const wrap = document.getElementById('formFields');
+  wrap.innerHTML = `
+    <div class="field"><label>Email</label><input id="au_email" type="email" placeholder="name@company.com"></div>
+    <div class="field"><label>Password</label><input id="au_password" type="text" placeholder="At least 6 characters"></div>
+    <div class="field"><label>Role</label>
+      <select id="au_role">
+        <option value="viewer" selected>viewer</option>
+        <option value="editor">editor</option>
+        <option value="admin">admin</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Tab Access</label>
+      <div style="display:flex; gap:8px; margin-bottom:6px;">
+        <button class="btn" id="au_selectAll" type="button" style="width:auto; margin-top:0;">Select all</button>
+        <button class="btn" id="au_selectNone" type="button" style="width:auto; margin-top:0;">Select none</button>
+      </div>
+      <div id="au_tabsWrap" style="display:flex; flex-direction:column; gap:6px; max-height:220px; overflow-y:auto; border:1px solid var(--panel-border); border-radius:8px; padding:10px;">
+        ${TABS.map(t=>`
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
+            <input type="checkbox" data-tab-checkbox="${t.id}" checked>
+            ${esc(t.label)}
+          </label>
+        `).join('')}
+      </div>
+      <p class="hint" style="margin-top:6px;">Ignored if role is <b>admin</b> — admins always see every tab.</p>
+    </div>
+    <div id="au_error" class="error"></div>
+    <p class="hint">Depending on your Supabase project's auth settings, the new user may need to confirm their email before they can log in. If you'd rather they get instant access, turn off <b>Confirm email</b> under Supabase → Authentication → Providers → Email.</p>
+  `;
+  document.getElementById('formModal').classList.add('show');
+  document.getElementById('au_selectAll').onclick = ()=> wrap.querySelectorAll('[data-tab-checkbox]').forEach(cb=>cb.checked = true);
+  document.getElementById('au_selectNone').onclick = ()=> wrap.querySelectorAll('[data-tab-checkbox]').forEach(cb=>cb.checked = false);
+
+  document.getElementById('saveForm').textContent = 'Create User';
+  document.getElementById('saveForm').onclick = async ()=>{
+    const errEl = document.getElementById('au_error');
+    errEl.textContent = '';
+    const email = document.getElementById('au_email').value.trim();
+    const password = document.getElementById('au_password').value;
+    const role = document.getElementById('au_role').value;
+    const checked = Array.from(wrap.querySelectorAll('[data-tab-checkbox]:checked')).map(cb=>cb.dataset.tabCheckbox);
+    const allowedTabs = checked.length === TABS.length ? null : checked;
+
+    if(!email){ errEl.textContent = 'Email is required.'; return; }
+    if(!password || password.length < 6){ errEl.textContent = 'Password must be at least 6 characters.'; return; }
+
+    const saveBtn = document.getElementById('saveForm');
+    saveBtn.disabled = true; saveBtn.textContent = 'Creating…';
+
+    try{
+      // Use a throwaway client for signUp so it never touches the admin's
+      // own active session on the shared `sb` client.
+      const tempClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth:{ persistSession:false } });
+      const { data: signUpData, error: signUpErr } = await tempClient.auth.signUp({ email, password });
+      if(signUpErr) throw signUpErr;
+      const newUserId = signUpData?.user?.id;
+      if(!newUserId) throw new Error('User created, but no ID was returned — check Supabase Authentication → Users to confirm.');
+
+      // Set role/tabs using the admin's real, authenticated client.
+      const { data: updated, error: updateErr } = await sb.from('app_users')
+        .update({ role, allowed_tabs: allowedTabs })
+        .eq('id', newUserId)
+        .select();
+      if(updateErr) throw updateErr;
+      if(!updated || !updated.length){
+        // The auth->app_users row hasn't shown up yet (no trigger, or a delay) - insert it directly.
+        const { error: insertErr } = await sb.from('app_users').insert({ id: newUserId, email, role, allowed_tabs: allowedTabs });
+        if(insertErr) throw insertErr;
+      }
+
+      document.getElementById('formModal').classList.remove('show');
+      renderContent();
+    }catch(e){
+      errEl.textContent = 'Could not create user: ' + (e.message || e);
+      saveBtn.disabled = false; saveBtn.textContent = 'Create User';
+    }
+  };
+  document.getElementById('cancelForm').onclick = ()=>{
+    document.getElementById('formModal').classList.remove('show');
+    document.getElementById('saveForm').textContent = 'Save';
+  };
 }
 
 function openTabAccessForm(userRow){
