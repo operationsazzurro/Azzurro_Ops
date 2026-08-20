@@ -620,10 +620,11 @@ function buildOrgNodeHTML(node){
   const lvl = orgLevelClass(node.designation);
   const hasChildren = node.children && node.children.length>0;
   const writeOk = canWrite();
+  const deleteOk = isAdmin();
   const nodeHtml = `
     <div class="org-node ${lvl}" data-id="${node.id}" data-name="${esc((node.full_name||'').toLowerCase())}" data-desig="${esc((node.designation||'').toLowerCase())}">
       ${hasChildren?`<span class="count-badge">${node.children.length}</span>`:''}
-      ${writeOk?`<button class="remove-badge" data-remove="${node.id}" title="Remove ${esc(node.full_name)}">×</button>`:''}
+      ${deleteOk?`<button class="remove-badge" data-remove="${node.id}" title="Remove ${esc(node.full_name)}">×</button>`:''}
       ${writeOk?`<button class="edit-badge" data-edit="${node.id}" title="Edit ${esc(node.full_name)}">✎</button>`:''}
       <div class="avatar">${initials(node.full_name)}</div>
       <div class="name">${esc(node.full_name)}</div>
@@ -852,11 +853,31 @@ function openOrgForm(existingRows, editingRow){
 function fmtDate(d){ if(!d) return '—'; return new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
 function esc(s){ return (s===null||s===undefined) ? '' : String(s).replace(/</g,'&lt;'); }
 
+// ---------- shared delete helper (admin-only, used across all data tables) ----------
+async function deleteRecord(table, id, label){
+  if(!window.confirm(`Delete ${label || 'this record'}? This cannot be undone.`)) return;
+  const { error } = await sb.from(table).delete().eq('id', id);
+  if(error){ alert('Could not delete: ' + error.message); return; }
+  renderContent();
+}
+
+async function deleteFeedbackRecord(id){
+  if(!window.confirm('Delete this feedback record and all its ratings? This cannot be undone.')) return;
+  // customer_feedback_ratings has no cascade delete on its FK, so clean those up first.
+  const { error: ratingsErr } = await sb.from('customer_feedback_ratings').delete().eq('feedback_id', id);
+  if(ratingsErr){ alert('Could not delete: ' + ratingsErr.message); return; }
+  const { error } = await sb.from('customer_feedback').delete().eq('id', id);
+  if(error){ alert('Could not delete: ' + error.message); return; }
+  renderContent();
+}
+
 async function renderTable(el, table, title, cols, fields, extraHtmlFn){
   const { data, error } = await sb.from(table).select('*').order('created_at',{ascending:false}).limit(500);
   if(error) throw error;
   const rows = data || [];
   const writeOk = canWrite();
+  const deleteOk = isAdmin();
+  const actionsOn = writeOk || deleteOk;
   el.innerHTML = `
     <div class="panel">
       <div class="toolbar">
@@ -867,13 +888,18 @@ async function renderTable(el, table, title, cols, fields, extraHtmlFn){
         </div>
       </div>
       <div style="overflow-x:auto;">
-        <table id="tbl"><thead><tr>${cols.map(c=>`<th>${c.replace(/_/g,' ')}</th>`).join('')}${writeOk?'<th></th>':''}</tr></thead>
+        <table id="tbl"><thead><tr>${cols.map(c=>`<th>${c.replace(/_/g,' ')}</th>`).join('')}${actionsOn?'<th></th>':''}</tr></thead>
         <tbody>
-        ${rows.length? rows.map((r,i)=>`<tr>${cols.map(c=>`<td>${esc(r[c])}</td>`).join('')}${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button></td>`:''}</tr>`).join('')
-          : `<tr class="empty-row"><td colspan="${cols.length + (writeOk?1:0)}">No records yet${writeOk?' — click + Add to create the first one.':'.'}</td></tr>`}
+        ${rows.length? rows.map((r,i)=>`<tr>${cols.map(c=>`<td>${esc(r[c])}</td>`).join('')}${actionsOn?`<td>${writeOk?`<button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>`:''}${deleteOk?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="${esc(r[cols[0]])}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
+          : `<tr class="empty-row"><td colspan="${cols.length + (actionsOn?1:0)}">No records yet${writeOk?' — click + Add to create the first one.':'.'}</td></tr>`}
         </tbody></table>
       </div>
     </div>`;
+  if(deleteOk){
+    el.querySelectorAll('[data-delete-id]').forEach(btn=>{
+      btn.onclick = ()=> deleteRecord(table, btn.dataset.deleteId, btn.dataset.deleteLabel);
+    });
+  }
   if(writeOk){
     document.getElementById('importBtn').onclick = ()=> openBulkImport(table, fields, title);
     document.getElementById('addBtn').onclick = ()=> openForm(title, fields, async (values)=>{
@@ -964,10 +990,15 @@ async function renderContracts(el){
       const projCell = projNames.length===0 ? '—'
         : projNames.length===1 ? esc(projNames[0])
         : `${esc(projNames[0])} <span class="badge progress" title="${esc(projNames.join(', '))}">+${projNames.length-1} more</span>`;
-      return `<tr><td>${esc(r.clients?.client_name||'—')}</td><td>${projCell}</td><td>${esc(r.contract_ref)}</td><td>${fmtDate(r.contract_expiry)}</td><td>${r.monthly_invoice_value?('AED '+r.monthly_invoice_value):'—'}</td><td>${r.manpower_sanctioned??'—'}</td><td><span class="badge ${r.status==='active'?'active':'expired'}">${r.status}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button></td>`:''}</tr>`;
+      return `<tr><td>${esc(r.clients?.client_name||'—')}</td><td>${projCell}</td><td>${esc(r.contract_ref)}</td><td>${fmtDate(r.contract_expiry)}</td><td>${r.monthly_invoice_value?('AED '+r.monthly_invoice_value):'—'}</td><td>${r.manpower_sanctioned??'—'}</td><td><span class="badge ${r.status==='active'?'active':'expired'}">${r.status}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="${esc(r.contract_ref)}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`;
     }).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?8:7}">No contracts yet.</td></tr>`}</tbody></table></div></div>`;
   if(!writeOk) return;
+  if(isAdmin()){
+    el.querySelectorAll('[data-delete-id]').forEach(btn=>{
+      btn.onclick = ()=> deleteRecord('contracts', btn.dataset.deleteId, btn.dataset.deleteLabel);
+    });
+  }
   document.getElementById('importBtn').onclick = async ()=>{
     const { data: clients, error: cErr } = await sb.from('clients').select('id, client_name').order('client_name');
     if(cErr){ alert('Could not load clients: '+cErr.message); return; }
@@ -1095,9 +1126,14 @@ async function renderSites(el){
       <button class="btn btn-primary" id="addBtn">+ Add Site</button>
     </div>` : ''}</div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Code</th><th>Project</th><th>City</th><th>Type</th><th>Manpower Req.</th>${writeOk?'<th></th>':''}</tr></thead>
-    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.site_name)}</td><td>${esc(r.site_code)||'—'}</td><td>${esc(r.projects?.project_name||'—')}</td><td>${esc(r.city)}</td><td>${esc(r.site_type)}</td><td>${r.manpower_required??0}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button></td>`:''}</tr>`).join('')
+    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.site_name)}</td><td>${esc(r.site_code)||'—'}</td><td>${esc(r.projects?.project_name||'—')}</td><td>${esc(r.city)}</td><td>${esc(r.site_type)}</td><td>${r.manpower_required??0}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="${esc(r.site_name)}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?7:6}">No sites yet.</td></tr>`}</tbody></table></div></div>`;
   if(!writeOk) return;
+  if(isAdmin()){
+    el.querySelectorAll('[data-delete-id]').forEach(btn=>{
+      btn.onclick = ()=> deleteRecord('sites', btn.dataset.deleteId, btn.dataset.deleteLabel);
+    });
+  }
   document.getElementById('importBtn').onclick = async ()=>{
     const { data: projects, error: pErr } = await sb.from('projects').select('id, project_name, project_code').order('project_name');
     if(pErr){ alert('Could not load projects: '+pErr.message); return; }
@@ -1176,8 +1212,13 @@ async function renderStaff(el){
     <div style="display:flex; gap:8px; flex-wrap:wrap;"><input class="search-box" id="tblSearch" placeholder="Search name/site...">
       ${writeOk?'<button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Staff</button>':''}</div></div>
     <div style="overflow-x:auto;"><table id="tbl"><thead><tr><th>Name</th><th>Site</th><th>Designation</th><th>Status</th><th>Contact</th>${writeOk?'<th></th>':''}</tr></thead>
-    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.full_name)}</td><td>${esc(r.sites?.site_name||'—')}</td><td>${esc(r.designation)}</td><td><span class="badge ${r.status==='active'?'active':'open'}">${r.status}</span></td><td>${esc(r.contact_number)}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button></td>`:''}</tr>`).join('')
+    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.full_name)}</td><td>${esc(r.sites?.site_name||'—')}</td><td>${esc(r.designation)}</td><td><span class="badge ${r.status==='active'?'active':'open'}">${r.status}</span></td><td>${esc(r.contact_number)}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="${esc(r.full_name)}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?6:5}">No staff records yet.${writeOk?' Use + Add, or Import CSV for bulk upload.':''}</td></tr>`}</tbody></table></div></div>`;
+  if(isAdmin()){
+    el.querySelectorAll('[data-delete-id]').forEach(btn=>{
+      btn.onclick = ()=> deleteRecord('staff', btn.dataset.deleteId, btn.dataset.deleteLabel);
+    });
+  }
   const staffFields = [
     {k:'employee_code',l:'Employee code'},{k:'full_name',l:'Full name'},{k:'designation',l:'Designation'},
     {k:'category',l:'Category'},{k:'contact_number',l:'Contact number'},{k:'joining_date',l:'Joining date',type:'date'},
@@ -1211,12 +1252,17 @@ async function renderInvoices(el){
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Invoice & WCR Submissions (${rows.length})</div>
     ${writeOk?'<div style="display:flex; gap:8px;"><button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Entry</button></div>':''}</div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Month</th><th>Amount</th><th>Invoice Submitted</th><th>WCR Submitted</th>${writeOk?'<th></th>':''}</tr></thead>
-    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.billing_month)}</td><td>${r.invoice_amount?('AED '+r.invoice_amount):'—'}</td><td><span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span></td><td><span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button></td>`:''}</tr>`).join('')
+    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.billing_month)}</td><td>${r.invoice_amount?('AED '+r.invoice_amount):'—'}</td><td><span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span></td><td><span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?6:5}">No entries yet.</td></tr>`}</tbody></table></div></div>`;
   const invFields = [
     {k:'site_id',l:'Site ID (UUID)'},{k:'billing_month',l:'Billing month',type:'date'},{k:'invoice_amount',l:'Invoice amount',type:'number'},
     {k:'invoice_submitted',l:'Invoice submitted',type:'checkbox'},{k:'wcr_submitted',l:'WCR submitted',type:'checkbox'},{k:'remarks',l:'Remarks'}
   ];
+  if(isAdmin()){
+    el.querySelectorAll('[data-delete-id]').forEach(btn=>{
+      btn.onclick = ()=> deleteRecord('invoice_wcr_submissions', btn.dataset.deleteId, btn.dataset.deleteLabel);
+    });
+  }
   if(!writeOk) return;
   document.getElementById('importBtn').onclick = ()=> openBulkImport('invoice_wcr_submissions', invFields, 'Invoice & WCR (site_id must be a valid site UUID)');
   document.getElementById('addBtn').onclick = ()=> openForm('Invoice / WCR Entry', invFields, async(values)=>{
@@ -1244,11 +1290,16 @@ async function renderKPI(el){
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">KPI Updates (${rows.length})</div>
     ${writeOk?'<div style="display:flex; gap:8px;"><button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add KPI Update</button></div>':''}</div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Month</th><th>Score</th><th>Remarks</th>${writeOk?'<th></th>':''}</tr></thead>
-    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.review_month)}</td><td>${r.kpi_score??'—'}</td><td>${esc(r.remarks)}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button></td>`:''}</tr>`).join('')
+    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.review_month)}</td><td>${r.kpi_score??'—'}</td><td>${esc(r.remarks)}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="KPI entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?5:4}">No KPI records yet.</td></tr>`}</tbody></table></div></div>`;
   const kpiFields = [
     {k:'site_id',l:'Site ID (UUID)'},{k:'review_month',l:'Review month',type:'date'},{k:'kpi_score',l:'Score (0-100)',type:'number'},{k:'remarks',l:'Remarks'}
   ];
+  if(isAdmin()){
+    el.querySelectorAll('[data-delete-id]').forEach(btn=>{
+      btn.onclick = ()=> deleteRecord('kpi_updates', btn.dataset.deleteId, btn.dataset.deleteLabel);
+    });
+  }
   if(!writeOk) return;
   document.getElementById('importBtn').onclick = ()=> openBulkImport('kpi_updates', kpiFields, 'KPI Updates (site_id must be a valid site UUID)');
   document.getElementById('addBtn').onclick = ()=> openForm('KPI Update', kpiFields, async(values)=>{
@@ -1276,8 +1327,13 @@ async function renderVisits(el){
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Manager Site Visits (${rows.length})</div>
     ${writeOk?'<div style="display:flex; gap:8px;"><button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Schedule Visit</button></div>':''}</div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Scheduled</th><th>Actual</th><th>Status</th><th>Notes</th>${writeOk?'<th></th>':''}</tr></thead>
-    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.scheduled_date)}</td><td>${fmtDate(r.actual_visit_date)}</td><td><span class="badge ${r.status==='completed'?'done':r.status==='missed'?'open':'progress'}">${r.status}</span></td><td>${esc(r.visit_notes)}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button></td>`:''}</tr>`).join('')
+    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.scheduled_date)}</td><td>${fmtDate(r.actual_visit_date)}</td><td><span class="badge ${r.status==='completed'?'done':r.status==='missed'?'open':'progress'}">${r.status}</span></td><td>${esc(r.visit_notes)}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="visit for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?6:5}">No visits scheduled yet.</td></tr>`}</tbody></table></div></div>`;
+  if(isAdmin()){
+    el.querySelectorAll('[data-delete-id]').forEach(btn=>{
+      btn.onclick = ()=> deleteRecord('manager_site_visits', btn.dataset.deleteId, btn.dataset.deleteLabel);
+    });
+  }
   const visitFields = [
     {k:'site_id',l:'Site ID (UUID)'},{k:'scheduled_date',l:'Scheduled date',type:'date'},{k:'actual_visit_date',l:'Actual visit date',type:'date'},
     {k:'status',l:'Status',type:'select',options:['scheduled','completed','missed','rescheduled']},{k:'visit_notes',l:'Notes'}
@@ -1307,8 +1363,13 @@ async function renderComplaints(el){
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Client Complaints (${rows.length})</div>
     ${writeOk?'<div style="display:flex; gap:8px;"><button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Log Complaint</button></div>':''}</div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Date</th><th>Category</th><th>Severity</th><th>Status</th>${writeOk?'<th></th>':''}</tr></thead>
-    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.date_raised)}</td><td>${esc(r.category)}</td><td>${esc(r.severity)}</td><td><span class="badge ${r.status==='resolved'||r.status==='closed'?'done':r.status==='in_progress'?'progress':'open'}">${r.status}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button></td>`:''}</tr>`).join('')
+    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.date_raised)}</td><td>${esc(r.category)}</td><td>${esc(r.severity)}</td><td><span class="badge ${r.status==='resolved'||r.status==='closed'?'done':r.status==='in_progress'?'progress':'open'}">${r.status}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="this complaint" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?6:5}">No complaints logged.</td></tr>`}</tbody></table></div></div>`;
+  if(isAdmin()){
+    el.querySelectorAll('[data-delete-id]').forEach(btn=>{
+      btn.onclick = ()=> deleteRecord('client_complaints', btn.dataset.deleteId, btn.dataset.deleteLabel);
+    });
+  }
   const complaintFields = [
     {k:'site_id',l:'Site ID (UUID)'},{k:'date_raised',l:'Date raised',type:'date'},{k:'raised_by',l:'Raised by'},{k:'category',l:'Category'},
     {k:'severity',l:'Severity',type:'select',options:['low','medium','high','critical']},
@@ -1340,8 +1401,13 @@ async function renderFollowups(el){
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Client Follow-ups (${rows.length})</div>
     ${writeOk?'<div style="display:flex; gap:8px;"><button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Follow-up</button></div>':''}</div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Contact</th><th>Follow-up Date</th><th>Next Action</th><th>Status</th>${writeOk?'<th></th>':''}</tr></thead>
-    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${esc(r.client_contact_name)}</td><td>${fmtDate(r.followup_date)}</td><td>${fmtDate(r.next_action_date)}</td><td><span class="badge ${r.status==='done'?'done':'open'}">${r.status}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button></td>`:''}</tr>`).join('')
+    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${esc(r.client_contact_name)}</td><td>${fmtDate(r.followup_date)}</td><td>${fmtDate(r.next_action_date)}</td><td><span class="badge ${r.status==='done'?'done':'open'}">${r.status}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="this follow-up" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?6:5}">No follow-ups logged.</td></tr>`}</tbody></table></div></div>`;
+  if(isAdmin()){
+    el.querySelectorAll('[data-delete-id]').forEach(btn=>{
+      btn.onclick = ()=> deleteRecord('client_followups', btn.dataset.deleteId, btn.dataset.deleteLabel);
+    });
+  }
   const followupFields = [
     {k:'site_id',l:'Site ID (UUID)'},{k:'client_contact_name',l:'Contact name'},{k:'followup_date',l:'Follow-up date',type:'date'},
     {k:'next_action_date',l:'Next action date',type:'date'},
@@ -1388,13 +1454,19 @@ async function renderFeedback(el){
         <td>${avgRatingLabel(r.customer_feedback_ratings)}</td>
         <td>${r.areas_of_improvement && r.areas_of_improvement.trim() ? `<span class="badge progress" title="${esc(r.areas_of_improvement)}">⚠ Improvement noted</span>` : ''}</td>
         <td><button class="icon-btn" data-view-idx="${i}" title="View details">👁</button></td>
-        ${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button></td>`:''}
+        ${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-feedback-id="${r.id}" title="Delete">🗑</button>`:''}</td>`:''}
       </tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?8:7}">No feedback logged yet.</td></tr>`}</tbody></table></div></div>`;
 
   el.querySelectorAll('[data-view-idx]').forEach(btn=>{
     btn.onclick = ()=> viewFeedbackDetail(rows[Number(btn.dataset.viewIdx)]);
   });
+
+  if(isAdmin()){
+    el.querySelectorAll('[data-delete-feedback-id]').forEach(btn=>{
+      btn.onclick = ()=> deleteFeedbackRecord(btn.dataset.deleteFeedbackId);
+    });
+  }
 
   if(!writeOk) return;
 
