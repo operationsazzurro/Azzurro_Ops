@@ -1713,42 +1713,50 @@ async function renderTodos(el){
   const { data, error } = await sb.from('reminders').select('*').order('due_date', { ascending: true });
   if(error) throw error;
   const rows = data || [];
-  const writeOk = canWrite();
+
+  // Admin sees everyone's tasks, so also resolve owner emails for display.
+  // (reminders.owner_id points at auth.users, which isn't directly joinable
+  // via PostgREST embedding, so this is a small separate lookup.)
+  let ownerEmailById = {};
+  if(isAdmin()){
+    const { data: users } = await sb.from('app_users').select('id, email');
+    (users||[]).forEach(u=> ownerEmailById[u.id] = u.email);
+  }
+
   const settings = todoAlertSettings();
+  const canManage = (r)=> currentUser && (r.owner_id === currentUser.id || isAdmin());
+
   el.innerHTML = `<div class="panel">
     <div class="toolbar">
       <div class="panel-title" style="margin:0;">To-Do (${rows.filter(r=>!r.is_done).length} pending)</div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
         <button class="icon-btn" id="todoSettingsBtn" title="Daily alert settings">⚙</button>
-        ${writeOk ? `<button class="btn btn-primary" id="addTodoBtn">+ Add Task</button>` : ''}
+        <button class="btn btn-primary" id="addTodoBtn">+ Add Task</button>
       </div>
     </div>
-    <p class="hint" style="margin-bottom:12px;">Every day at <b>${settings.dailyTime} (UAE time)</b>${settings.enabled?'':' (currently off)'}, this app announces any pending tasks out loud (via Hermes if connected, otherwise your browser's voice) and pops up a summary while it's open — and, separately, an email digest goes out at the same time even if nobody has the app open. Individual tasks also get their own alert the moment they become overdue. Tasks stay listed here — nothing disappears until you mark it done.</p>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Date Added</th><th>Task</th><th>Due</th><th>Status</th>${writeOk?'<th></th>':''}</tr></thead>
+    <p class="hint" style="margin-bottom:12px;">Every day at <b>${settings.dailyTime} (UAE time)</b>${settings.enabled?'':' (currently off)'}, this app announces your own pending tasks out loud (your browser's voice) and pops up a summary while it's open — and, separately, an email digest goes out at the same time to each person's own email even if nobody has the app open. Individual tasks also get their own alert the moment they become overdue. Tasks stay listed here — nothing disappears until marked done. Everyone can add their own tasks; admins can also see and manage everyone's.</p>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Date Added</th>${isAdmin()?'<th>Owner</th>':''}<th>Task</th><th>Due</th><th>Status</th><th></th></tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>`<tr>
         <td>${fmtDate(r.created_at)}</td>
+        ${isAdmin()?`<td>${r.owner_id ? esc(ownerEmailById[r.owner_id]||'—') : '<span style="color:var(--text-dim);">Shared</span>'}</td>`:''}
         <td>${esc(r.title)}${r.description?`<div style="color:var(--text-dim); font-size:11.5px; margin-top:2px;">${esc(r.description)}</div>`:''}</td>
         <td>${r.due_date ? new Date(r.due_date).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
         <td>${todoStatusBadge(r)}</td>
-        ${writeOk?`<td>
-          ${!r.is_done?`<button class="icon-btn" data-complete-id="${r.id}" title="Mark complete">✓</button>`:''}
-          <button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>
-          ${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="this task" title="Delete">🗑</button>`:''}
-        </td>`:''}
+        <td>
+          ${canManage(r) && !r.is_done?`<button class="icon-btn" data-complete-id="${r.id}" title="Mark complete">✓</button>`:''}
+          ${canManage(r)?`<button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>`:''}
+          ${canManage(r)?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="this task" title="Delete">🗑</button>`:''}
+        </td>
       </tr>`).join('')
-      : `<tr class="empty-row"><td colspan="${writeOk?5:4}">No tasks yet.${writeOk?' Click + Add Task to create one.':''}</td></tr>`}
+      : `<tr class="empty-row"><td colspan="${isAdmin()?6:5}">No tasks yet. Click + Add Task to create one.</td></tr>`}
     </tbody></table></div>
   </div>`;
 
   document.getElementById('todoSettingsBtn').onclick = openTodoSettingsForm;
 
-  if(isAdmin()){
-    el.querySelectorAll('[data-delete-id]').forEach(btn=>{
-      btn.onclick = ()=> deleteRecord('reminders', btn.dataset.deleteId, btn.dataset.deleteLabel);
-    });
-  }
-  if(!writeOk) return;
-
+  el.querySelectorAll('[data-delete-id]').forEach(btn=>{
+    btn.onclick = ()=> deleteRecord('reminders', btn.dataset.deleteId, btn.dataset.deleteLabel);
+  });
   el.querySelectorAll('[data-complete-id]').forEach(btn=>{
     btn.onclick = async ()=>{
       const { error } = await sb.from('reminders').update({ is_done: true }).eq('id', btn.dataset.completeId);
@@ -1866,24 +1874,15 @@ function showTodoToast(message){
   setTimeout(()=> toast.remove(), 15000);
 }
 
-async function speakTaskAlert(fallbackMessage, hermesPrompt){
-  const cfg = getHermesConfig();
-  if(cfg && cfg.url){
-    try{
-      const phrased = await sendRawToHermes(cfg, [{ role:'user', content: hermesPrompt }]);
-      speak(phrased);
-      showTodoToast(phrased);
-      return;
-    }catch(e){
-      // Hermes API failed - fall through to browser voice below
-    }
-  }
-  speak(fallbackMessage);
-  showTodoToast(fallbackMessage);
+function speakTaskAlert(message){
+  speak(message);
+  showTodoToast(message);
 }
 
 async function checkTodoAlerts(){
   if(!sb || !currentUser) return;
+  // RLS already scopes this to: my own tasks + shared (owner_id null) tasks,
+  // plus everything if I'm an admin - no client-side filtering needed.
   const { data, error } = await sb.from('reminders').select('*').eq('is_done', false);
   if(error || !data) return;
   const now = new Date();
@@ -1894,10 +1893,7 @@ async function checkTodoAlerts(){
     if(todoAlertedIds.has(task.id)) continue;
     if(new Date(task.due_date) <= now){
       todoAlertedIds.add(task.id);
-      await speakTaskAlert(
-        `Reminder: the task "${task.title}" is now due.`,
-        `In one short friendly sentence, remind me that my task "${task.title}" is now due. Just the reminder sentence, nothing else.`
-      );
+      speakTaskAlert(`Reminder: the task "${task.title}" is now due.`);
     }
   }
 
@@ -1915,10 +1911,7 @@ async function checkTodoAlerts(){
   todoLastDailyFireDate = todayStr;
   localStorage.setItem('todo_last_daily_fire', todayStr);
   const titles = pending.slice(0, 8).map(t=>t.title);
-  await speakTaskAlert(
-    `You have ${pending.length} pending task${pending.length>1?'s':''}: ${titles.join(', ')}.`,
-    `In two short friendly sentences, summarize that I still have ${pending.length} pending task(s) to finish today before I wrap up: ${titles.join('; ')}. Keep it brief and encouraging.`
-  );
+  speakTaskAlert(`You have ${pending.length} pending task${pending.length>1?'s':''}: ${titles.join(', ')}.`);
 }
 
 function initTodoAlerts(){
