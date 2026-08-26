@@ -1734,11 +1734,11 @@ async function renderTodos(el){
         <button class="btn btn-primary" id="addTodoBtn">+ Add Task</button>
       </div>
     </div>
-    <p class="hint" style="margin-bottom:12px;">Every day at <b>${settings.dailyTime} (UAE time)</b>${settings.enabled?'':' (currently off)'}, this app announces your own pending tasks out loud (your browser's voice) and pops up a summary while it's open — and, separately, an email digest goes out at the same time to each person's own email even if nobody has the app open. Individual tasks also get their own alert the moment they become overdue. Tasks stay listed here — nothing disappears until marked done. Everyone can add their own tasks; admins can also see and manage everyone's.</p>
+    <p class="hint" style="margin-bottom:12px;">Every day at <b>${settings.dailyTime} (UAE time)</b>${settings.enabled?'':' (currently off)'}, this app announces your own pending tasks out loud (your browser's voice) and pops up a summary while it's open — and, separately, an email digest goes out at the same time to your own email even if nobody has the app open. Individual tasks also get their own alert the moment they become overdue. Tasks stay listed here — nothing disappears until marked done. Your tasks are private to you; admins can see and manage everyone's for oversight.</p>
     <div style="overflow-x:auto;"><table><thead><tr><th>Date Added</th>${isAdmin()?'<th>Owner</th>':''}<th>Task</th><th>Due</th><th>Status</th><th></th></tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>`<tr>
         <td>${fmtDate(r.created_at)}</td>
-        ${isAdmin()?`<td>${r.owner_id ? esc(ownerEmailById[r.owner_id]||'—') : '<span style="color:var(--text-dim);">Shared</span>'}</td>`:''}
+        ${isAdmin()?`<td>${r.owner_id ? esc(ownerEmailById[r.owner_id]||'—') : '<span style="color:var(--text-dim);">Unowned (legacy)</span>'}</td>`:''}
         <td>${esc(r.title)}${r.description?`<div style="color:var(--text-dim); font-size:11.5px; margin-top:2px;">${esc(r.description)}</div>`:''}</td>
         <td>${r.due_date ? new Date(r.due_date).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
         <td>${todoStatusBadge(r)}</td>
@@ -2463,10 +2463,20 @@ async function sendChatMessage(){
   thinking.textContent = 'Thinking...';
   document.getElementById('chatPanelBody').appendChild(thinking);
   document.getElementById('chatPanelBody').scrollTop = 999999;
+
+  // A warm Hermes instance replies well within a few seconds. If it's still
+  // going after that, it's almost certainly waking up from Render's free-tier
+  // sleep - let the person know it's not stuck, just slow to start.
+  const wakeTimer = setTimeout(()=>{
+    thinking.textContent = "Hermes looks like it's waking up from sleep — this can take up to a minute on the free tier. Hang tight…";
+  }, 6000);
+
   try{
     const reply = await callHermes(text);
+    clearTimeout(wakeTimer);
     thinking.textContent = reply;
   }catch(e){
+    clearTimeout(wakeTimer);
     thinking.remove();
     appendChatMsg('error', e.message || String(e));
     const fallback = await answerQuery(text);
@@ -2572,9 +2582,13 @@ function initVoice(){
     const transcript = event.results[0][0].transcript;
     voiceHeard.textContent = '"' + transcript + '"';
     voiceAnswer.textContent = 'Thinking...';
+    const wakeTimer = setTimeout(()=>{
+      voiceAnswer.textContent = "Hermes looks like it's waking up from sleep — this can take up to a minute. Hang tight…";
+    }, 6000);
     let answer;
     try{ answer = await callHermes(transcript); }
     catch(e){ answer = await answerQuery(transcript); }
+    clearTimeout(wakeTimer);
     voiceAnswer.textContent = answer;
     speak(answer);
   };
