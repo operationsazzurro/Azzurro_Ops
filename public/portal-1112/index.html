@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg-0:#060a12;
@@ -1499,6 +1500,105 @@ async function renderFollowups(el){
   });
 }
 
+// ---------- Feedback Excel export ----------
+function classifyFeedback(ratings){
+  const ratingByArea = {};
+  (ratings||[]).forEach(r=>{ if(r.rating) ratingByArea[r.area] = r.rating; });
+  const allAreasRated = FEEDBACK_AREAS.every(a => ratingByArea[a]);
+  const isGood = allAreasRated && FEEDBACK_AREAS.every(a => ratingByArea[a]==='Excellent' || ratingByArea[a]==='Very Good');
+  const scored = FEEDBACK_AREAS.map(a => RATING_SCORE[ratingByArea[a]] || 0).filter(v=>v>0);
+  const score = scored.length ? Math.round((scored.reduce((a,b)=>a+b,0)/scored.length)*10)/10 : 0;
+  return { ratingByArea, isGood, score };
+}
+
+async function exportFeedbackReport(){
+  const btn = document.getElementById('exportFeedbackBtn');
+  const originalText = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Building report…';
+  try{
+    if(typeof XLSX === 'undefined'){
+      alert('The Excel export library failed to load — check your internet connection and try again.');
+      return;
+    }
+
+    const [{ data: feedback, error: fErr }, { data: allSites, error: sErr }] = await Promise.all([
+      sb.from('customer_feedback').select(`
+        reporting_period, client_name, areas_of_improvement,
+        sites(site_name, projects(project_manager_id, org_hierarchy(full_name))),
+        customer_feedback_ratings(area, rating, remarks)
+      `).order('reporting_period', { ascending: false }),
+      sb.from('sites').select('id, projects(project_manager_id, org_hierarchy(full_name))'),
+    ]);
+    if(fErr) throw fErr;
+    if(sErr) throw sErr;
+
+    // True site count per manager (all sites assigned to them, not just ones with feedback)
+    const managerSiteCount = {};
+    (allSites||[]).forEach(s=>{
+      const mgr = s.projects?.org_hierarchy?.full_name || 'Unassigned';
+      managerSiteCount[mgr] = (managerSiteCount[mgr]||0) + 1;
+    });
+
+    // ---- Detail sheet rows ----
+    const detailRows = (feedback||[]).map(fb=>{
+      const managerName = fb.sites?.projects?.org_hierarchy?.full_name || 'Unassigned';
+      const siteName = fb.sites?.site_name || '—';
+      const { ratingByArea, isGood, score } = classifyFeedback(fb.customer_feedback_ratings);
+      const row = {
+        'Site Name': siteName,
+        'Manager Name': managerName,
+        'Client': fb.client_name || '',
+        'Period': fb.reporting_period ? fmtDate(fb.reporting_period) : '',
+      };
+      FEEDBACK_AREAS.forEach(area => { row[area] = ratingByArea[area] || ''; });
+      row['Areas of Improvement'] = fb.areas_of_improvement || '';
+      row['Score (out of 4)'] = score;
+      row['Classification'] = isGood ? 'Good Feedback' : 'Needs Improvement';
+      return row;
+    });
+
+    // ---- Summary sheet: per-manager stats ----
+    const managerStats = {};
+    detailRows.forEach(row=>{
+      const mgr = row['Manager Name'];
+      if(!managerStats[mgr]) managerStats[mgr] = { total: 0, good: 0, bad: 0 };
+      managerStats[mgr].total++;
+      if(row['Classification']==='Good Feedback') managerStats[mgr].good++; else managerStats[mgr].bad++;
+    });
+    const allManagerNames = new Set([...Object.keys(managerSiteCount), ...Object.keys(managerStats)]);
+    const summaryAoa = [
+      ['Manager Summary'],
+      ['Manager Name', 'No. of Sites Managed', 'Total Feedback Received', 'Good Feedback', 'Needs Improvement'],
+      ...[...allManagerNames].sort().map(mgr => [
+        mgr,
+        managerSiteCount[mgr] || 0,
+        managerStats[mgr]?.total || 0,
+        managerStats[mgr]?.good || 0,
+        managerStats[mgr]?.bad || 0,
+      ]),
+      [],
+      ['Areas of Improvement by Client'],
+      ['Client', 'Site', 'Manager', 'Period', 'Areas of Improvement'],
+      ...detailRows.filter(r => r['Areas of Improvement'] && r['Areas of Improvement'].trim()).map(r => [
+        r['Client'], r['Site Name'], r['Manager Name'], r['Period'], r['Areas of Improvement']
+      ]),
+    ];
+
+    const wb = XLSX.utils.book_new();
+    const detailSheet = XLSX.utils.json_to_sheet(detailRows);
+    const summarySheet = XLSX.utils.aoa_to_sheet(summaryAoa);
+    XLSX.utils.book_append_sheet(wb, detailSheet, 'Detail');
+    XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
+
+    const filename = `Feedback_Analysis_Report_${new Date().toISOString().slice(0,10)}.xlsx`;
+    XLSX.writeFile(wb, filename);
+  }catch(e){
+    alert('Could not build report: ' + (e.message || e));
+  }finally{
+    btn.disabled = false; btn.textContent = originalText;
+  }
+}
+
 async function renderFeedback(el){
   const { data, error } = await sb.from('customer_feedback')
     .select('*, sites(site_name), customer_feedback_ratings(*)')
@@ -1508,10 +1608,11 @@ async function renderFeedback(el){
   const writeOk = canWrite();
   el.innerHTML = `<div class="panel"><div class="toolbar">
     <div class="panel-title" style="margin:0;">Customer Feedback (${rows.length})</div>
-    ${writeOk ? `<div style="display:flex; gap:8px; flex-wrap:wrap;">
-      <button class="btn" id="linkBtn">🔗 Generate Feedback Link</button>
-      <button class="btn btn-primary" id="addFeedbackBtn">+ Add Feedback</button>
-    </div>` : ''}</div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="btn" id="exportFeedbackBtn">⬇ Export Excel Report</button>
+      ${writeOk ? `<button class="btn" id="linkBtn">🔗 Generate Feedback Link</button>
+      <button class="btn btn-primary" id="addFeedbackBtn">+ Add Feedback</button>` : ''}
+    </div></div>
     <p class="hint" style="margin-bottom:12px;">Hardcopy forms your team receives can be entered manually. A generated link auto-appears here on submit.</p>
     <div style="overflow-x:auto;"><table><thead><tr><th>Period</th><th>Site</th><th>Client</th><th>Via</th><th>Overall</th><th></th><th></th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>`<tr>
@@ -1529,6 +1630,8 @@ async function renderFeedback(el){
   el.querySelectorAll('[data-view-idx]').forEach(btn=>{
     btn.onclick = ()=> viewFeedbackDetail(rows[Number(btn.dataset.viewIdx)]);
   });
+
+  document.getElementById('exportFeedbackBtn').onclick = exportFeedbackReport;
 
   if(isAdmin()){
     el.querySelectorAll('[data-delete-feedback-id]').forEach(btn=>{
