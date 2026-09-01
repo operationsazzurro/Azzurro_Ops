@@ -975,6 +975,70 @@ async function renderClients(el){
      {k:'primary_contact_email',l:'Contact email'},{k:'primary_contact_phone',l:'Contact phone'}]);
 }
 
+function openProjectManagersPanel(){
+  resetFormModalButtons();
+  document.getElementById('formTitle').textContent = 'Assign Project Managers';
+  const wrap = document.getElementById('formFields');
+  wrap.innerHTML = `<p class="hint">Loading projects…</p>`;
+  document.getElementById('formModal').classList.add('show');
+  document.getElementById('saveForm').style.display = 'none';
+  document.getElementById('cancelForm').textContent = 'Close';
+  document.getElementById('cancelForm').onclick = ()=>{
+    document.getElementById('formModal').classList.remove('show');
+    document.getElementById('saveForm').style.display = '';
+    document.getElementById('saveForm').textContent = 'Save';
+    document.getElementById('cancelForm').textContent = 'Cancel';
+  };
+
+  (async ()=>{
+    const writeOk = canWrite();
+    const [{ data: projects, error: pErr }, { data: people, error: oErr }] = await Promise.all([
+      sb.from('projects').select('id, project_name, project_code, project_manager_id, contracts(clients(client_name))').order('project_name'),
+      sb.from('org_hierarchy').select('id, full_name, designation').order('full_name'),
+    ]);
+    if(pErr || oErr){
+      wrap.innerHTML = `<p class="hint" style="color:var(--red);">Could not load: ${esc((pErr||oErr).message)}</p>`;
+      return;
+    }
+    if(!projects || !projects.length){
+      wrap.innerHTML = `<p class="hint">No projects yet. Projects are created automatically when you add a contract with a project name.</p>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <p class="hint" style="margin-bottom:10px;">Pick a manager for each project — saves immediately when changed.</p>
+      <div style="display:flex; flex-direction:column; gap:10px; max-height:400px; overflow-y:auto;">
+        ${projects.map(p=>`
+          <div style="border:1px solid var(--panel-border); border-radius:8px; padding:10px 12px;">
+            <div style="font-size:13px; color:var(--text-hi); font-weight:500;">${esc(p.project_name)}${p.project_code?` <span style="color:var(--text-dim); font-weight:400;">[${esc(p.project_code)}]</span>`:''}</div>
+            <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:6px;">${esc(p.contracts?.clients?.client_name||'No client linked')}</div>
+            ${writeOk ? `
+              <select data-project-id="${p.id}">
+                <option value="">— No manager assigned —</option>
+                ${people.map(person=>`<option value="${person.id}" ${person.id===p.project_manager_id?'selected':''}>${esc(person.full_name)}${person.designation?' — '+esc(person.designation):''}</option>`).join('')}
+              </select>
+              <span class="pm-save-status" data-status-for="${p.id}" style="font-size:11px; color:var(--cyan-bright); margin-left:8px;"></span>
+            ` : `<div style="font-size:12.5px; color:var(--text-mid);">${p.project_manager_id ? esc((people.find(pe=>pe.id===p.project_manager_id)||{}).full_name || '—') : 'No manager assigned'}</div>`}
+          </div>
+        `).join('')}
+      </div>
+    `;
+    if(writeOk){
+      wrap.querySelectorAll('[data-project-id]').forEach(sel=>{
+        sel.onchange = async (e)=>{
+          const projectId = e.target.dataset.projectId;
+          const managerId = e.target.value || null;
+          const statusEl = wrap.querySelector(`[data-status-for="${projectId}"]`);
+          statusEl.textContent = 'Saving…';
+          const { error } = await sb.from('projects').update({ project_manager_id: managerId }).eq('id', projectId);
+          statusEl.textContent = error ? 'Could not save' : 'Saved ✓';
+          statusEl.style.color = error ? 'var(--red)' : 'var(--cyan-bright)';
+          if(!error) setTimeout(()=>{ statusEl.textContent = ''; }, 2000);
+        };
+      });
+    }
+  })();
+}
+
 async function renderContracts(el){
   const { data, error } = await sb.from('contracts').select('*, clients(client_name), projects(project_name)').order('contract_expiry');
   if(error) throw error;
@@ -982,10 +1046,11 @@ async function renderContracts(el){
   const writeOk = canWrite();
   el.innerHTML = `<div class="panel"><div class="toolbar">
     <div class="panel-title" style="margin:0;">Projects & Contracts (${rows.length})</div>
-    ${writeOk ? `<div style="display:flex; gap:8px;">
-      <button class="btn" id="importBtn">⬆ Import CSV</button>
-      <button class="btn btn-primary" id="addBtn">+ Add Contract</button>
-    </div>` : ''}</div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn" id="manageManagersBtn">👤 Assign Project Managers</button>
+      ${writeOk ? `<button class="btn" id="importBtn">⬆ Import CSV</button>
+      <button class="btn btn-primary" id="addBtn">+ Add Contract</button>` : ''}
+    </div></div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Client</th><th>Project(s)</th><th>Ref</th><th>Expiry</th><th>Monthly Value</th><th>Manpower</th><th>Status</th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>{
       const projNames = (r.projects||[]).map(p=>p.project_name);
@@ -995,6 +1060,7 @@ async function renderContracts(el){
       return `<tr><td>${esc(r.clients?.client_name||'—')}</td><td>${projCell}</td><td>${esc(r.contract_ref)}</td><td>${fmtDate(r.contract_expiry)}</td><td>${r.monthly_invoice_value?('AED '+r.monthly_invoice_value):'—'}</td><td>${r.manpower_sanctioned??'—'}</td><td><span class="badge ${r.status==='active'?'active':'expired'}">${r.status}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="${esc(r.contract_ref)}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`;
     }).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?8:7}">No contracts yet.</td></tr>`}</tbody></table></div></div>`;
+  document.getElementById('manageManagersBtn').onclick = openProjectManagersPanel;
   if(!writeOk) return;
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
