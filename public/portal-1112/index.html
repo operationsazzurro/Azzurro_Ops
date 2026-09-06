@@ -1324,7 +1324,7 @@ async function renderInvoices(el){
     <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.billing_month)}</td><td>${r.invoice_amount?('AED '+r.invoice_amount):'—'}</td><td><span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span></td><td><span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?6:5}">No entries yet.</td></tr>`}</tbody></table></div></div>`;
   const invFields = [
-    {k:'site_id',l:'Site ID (UUID)'},{k:'billing_month',l:'Billing month',type:'date'},{k:'invoice_amount',l:'Invoice amount',type:'number'},
+    {k:'site_id',l:'Site',type:'site-search'},{k:'billing_month',l:'Billing month',type:'date'},{k:'invoice_amount',l:'Invoice amount',type:'number'},
     {k:'invoice_submitted',l:'Invoice submitted',type:'checkbox'},{k:'wcr_submitted',l:'WCR submitted',type:'checkbox'},{k:'remarks',l:'Remarks'}
   ];
   if(isAdmin()){
@@ -1362,7 +1362,7 @@ async function renderKPI(el){
     <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.review_month)}</td><td>${r.kpi_score??'—'}</td><td>${esc(r.remarks)}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="KPI entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?5:4}">No KPI records yet.</td></tr>`}</tbody></table></div></div>`;
   const kpiFields = [
-    {k:'site_id',l:'Site ID (UUID)'},{k:'review_month',l:'Review month',type:'date'},{k:'kpi_score',l:'Score (0-100)',type:'number'},{k:'remarks',l:'Remarks'}
+    {k:'site_id',l:'Site',type:'site-search'},{k:'review_month',l:'Review month',type:'date'},{k:'kpi_score',l:'Score (0-100)',type:'number'},{k:'remarks',l:'Remarks'}
   ];
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
@@ -1404,7 +1404,7 @@ async function renderVisits(el){
     });
   }
   const visitFields = [
-    {k:'site_id',l:'Site ID (UUID)'},{k:'scheduled_date',l:'Scheduled date',type:'date'},{k:'actual_visit_date',l:'Actual visit date',type:'date'},
+    {k:'site_id',l:'Site',type:'site-search'},{k:'scheduled_date',l:'Scheduled date',type:'date'},{k:'actual_visit_date',l:'Actual visit date',type:'date'},
     {k:'status',l:'Status',type:'select',options:['scheduled','completed','missed','rescheduled']},{k:'visit_notes',l:'Notes'}
   ];
   if(!writeOk) return;
@@ -1440,7 +1440,7 @@ async function renderComplaints(el){
     });
   }
   const complaintFields = [
-    {k:'site_id',l:'Site ID (UUID)'},{k:'date_raised',l:'Date raised',type:'date'},{k:'raised_by',l:'Raised by'},{k:'category',l:'Category'},
+    {k:'site_id',l:'Site',type:'site-search'},{k:'date_raised',l:'Date raised',type:'date'},{k:'raised_by',l:'Raised by'},{k:'category',l:'Category'},
     {k:'severity',l:'Severity',type:'select',options:['low','medium','high','critical']},
     {k:'status',l:'Status',type:'select',options:['open','in_progress','resolved','closed']},
     {k:'description',l:'Description'},{k:'resolution_notes',l:'Resolution notes'}
@@ -1478,7 +1478,7 @@ async function renderFollowups(el){
     });
   }
   const followupFields = [
-    {k:'site_id',l:'Site ID (UUID)'},{k:'client_contact_name',l:'Contact name'},{k:'followup_date',l:'Follow-up date',type:'date'},
+    {k:'site_id',l:'Site',type:'site-search'},{k:'client_contact_name',l:'Contact name'},{k:'followup_date',l:'Follow-up date',type:'date'},
     {k:'next_action_date',l:'Next action date',type:'date'},
     {k:'status',l:'Status',type:'select',options:['pending','done','cancelled']},
     {k:'notes',l:'Notes'}
@@ -2325,10 +2325,22 @@ function openBulkImport(table, fields, title, reference){
 }
 
 // ---------- generic add-record modal ----------
-function openForm(title, fields, onSave, existingValues){
+let sitesCacheForForms = null;
+async function getSitesForForms(){
+  if(sitesCacheForForms) return sitesCacheForForms;
+  const { data } = await sb.from('sites').select('id, site_name').order('site_name');
+  sitesCacheForForms = data || [];
+  return sitesCacheForForms;
+}
+
+async function openForm(title, fields, onSave, existingValues){
   resetFormModalButtons();
   document.getElementById('formTitle').textContent = (existingValues ? 'Edit ' : 'Add ') + title;
   const wrap = document.getElementById('formFields');
+
+  const hasSiteSearch = fields.some(f=>f.type==='site-search');
+  const sitesForForm = hasSiteSearch ? await getSitesForForms() : [];
+
   wrap.innerHTML = fields.map(f=>{
     const val = existingValues ? existingValues[f.k] : undefined;
     if(f.type==='textarea') return `<div class="field"><label>${f.l}</label><textarea data-k="${f.k}" rows="3">${val!=null?esc(val):''}</textarea></div>`;
@@ -2337,9 +2349,48 @@ function openForm(title, fields, onSave, existingValues){
       return `<div class="field"><label>${f.l}</label><select data-k="${f.k}"><option value="false" ${!boolVal?'selected':''}>No</option><option value="true" ${boolVal?'selected':''}>Yes</option></select></div>`;
     }
     if(f.type==='select') return `<div class="field"><label>${f.l}</label><select data-k="${f.k}">${f.options.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}</select></div>`;
+    if(f.type==='site-search'){
+      const preselected = val ? sitesForForm.find(s=>s.id===val) : null;
+      return `<div class="field" style="position:relative;">
+        <label>${f.l}</label>
+        <input type="text" class="site-search-input" placeholder="Search sites..." autocomplete="off" value="${preselected?esc(preselected.site_name):''}">
+        <input type="hidden" data-k="${f.k}" value="${val!=null?esc(val):''}">
+        <div class="model-list site-search-list" style="display:none; position:absolute; z-index:10; width:100%; background:var(--bg-1); margin-top:4px;"></div>
+      </div>`;
+    }
     return `<div class="field"><label>${f.l}</label><input data-k="${f.k}" type="${f.type||'text'}" value="${val!=null?esc(val):''}"></div>`;
   }).join('');
   document.getElementById('formModal').classList.add('show');
+
+  wrap.querySelectorAll('.field').forEach(fieldDiv=>{
+    const searchInput = fieldDiv.querySelector('.site-search-input');
+    if(!searchInput) return;
+    const hiddenInput = fieldDiv.querySelector('input[type="hidden"][data-k]');
+    const listEl = fieldDiv.querySelector('.site-search-list');
+
+    function renderOptions(query){
+      const q = (query||'').trim().toLowerCase();
+      const matches = q ? sitesForForm.filter(s=>s.site_name.toLowerCase().includes(q)) : sitesForForm;
+      if(!matches.length){
+        listEl.innerHTML = '<div class="model-list-empty">No sites match.</div>';
+      } else {
+        listEl.innerHTML = matches.slice(0,50).map(s=>`<div class="model-option ${s.id===hiddenInput.value?'selected':''}" data-site-id="${s.id}">${esc(s.site_name)}</div>`).join('');
+        listEl.querySelectorAll('[data-site-id]').forEach(opt=>{
+          opt.onclick = ()=>{
+            const site = sitesForForm.find(s=>s.id===opt.dataset.siteId);
+            hiddenInput.value = site.id;
+            searchInput.value = site.site_name;
+            listEl.style.display = 'none';
+          };
+        });
+      }
+      listEl.style.display = 'block';
+    }
+    searchInput.oninput = (e)=>{ hiddenInput.value = ''; renderOptions(e.target.value); };
+    searchInput.onfocus = ()=> renderOptions(searchInput.value);
+    searchInput.addEventListener('blur', ()=> setTimeout(()=>{ listEl.style.display='none'; }, 150));
+  });
+
   document.getElementById('saveForm').onclick = async ()=>{
     const values = {};
     wrap.querySelectorAll('[data-k]').forEach(inp=>{
