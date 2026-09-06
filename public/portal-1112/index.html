@@ -1329,14 +1329,14 @@ async function renderInvoices(el){
         <td>${r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '—'}</td>
         <td>${fmtDate(r.invoice_submission_date)}</td>
         <td>${r.invoice_amount?('AED '+r.invoice_amount):'—'}</td>
-        <td>${r.invoice_status?`<span class="badge ${r.invoice_status==='Returned to Finance'?'open':r.invoice_status==='Acknowledgement submitted to Finance'?'done':'progress'}">${esc(r.invoice_status)}</span>`:`<span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span>`}</td>
+        <td>${r.invoice_status?`<span class="badge ${(r.invoice_status==='Returned to Finance'||r.invoice_status==='Invoice not received')?'open':r.invoice_status==='Acknowledgement submitted to Finance'?'done':'progress'}">${esc(r.invoice_status)}</span>`:`<span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span>`}</td>
         <td>${r.invoice_status_updated_at ? new Date(r.invoice_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
         <td><span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span></td>
         ${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}
       </tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?8:7}">No entries yet.</td></tr>`}</tbody></table></div></div>`;
   const INVOICE_STATUS_OPTIONS = [
-    'Invoice received', 'Submitted to Manager', 'Acknowledgement submitted to Finance',
+    'Invoice not received', 'Invoice received', 'Submitted to Manager', 'Acknowledgement submitted to Finance',
     'Submitted via Email/Portal', 'Returned to Finance'
   ];
   const invFields = [
