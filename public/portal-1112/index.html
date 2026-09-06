@@ -1323,15 +1323,25 @@ async function renderInvoices(el){
       <button class="btn" id="exportInvoiceBtn">⬇ Export Excel</button>
       ${writeOk?'<button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Entry</button>':''}
     </div></div>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Month</th><th>Amount</th><th>Invoice Status</th><th>WCR Submitted</th>${writeOk?'<th></th>':''}</tr></thead>
-    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.billing_month)}</td><td>${r.invoice_amount?('AED '+r.invoice_amount):'—'}</td><td>${r.invoice_status?`<span class="badge ${r.invoice_status==='Returned to Finance'?'open':r.invoice_status==='Acknowledgement submitted to Finance'?'done':'progress'}">${esc(r.invoice_status)}</span>`:`<span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span>`}</td><td><span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
-      : `<tr class="empty-row"><td colspan="${writeOk?6:5}">No entries yet.</td></tr>`}</tbody></table></div></div>`;
+    <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Billing Month</th><th>Invoice Date</th><th>Amount</th><th>Invoice Status</th><th>Status Updated</th><th>WCR Submitted</th>${writeOk?'<th></th>':''}</tr></thead>
+    <tbody>${rows.length? rows.map((r,i)=>`<tr>
+        <td>${esc(r.sites?.site_name||'—')}</td>
+        <td>${r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '—'}</td>
+        <td>${fmtDate(r.invoice_submission_date)}</td>
+        <td>${r.invoice_amount?('AED '+r.invoice_amount):'—'}</td>
+        <td>${r.invoice_status?`<span class="badge ${r.invoice_status==='Returned to Finance'?'open':r.invoice_status==='Acknowledgement submitted to Finance'?'done':'progress'}">${esc(r.invoice_status)}</span>`:`<span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span>`}</td>
+        <td>${r.invoice_status_updated_at ? new Date(r.invoice_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
+        <td><span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span></td>
+        ${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}
+      </tr>`).join('')
+      : `<tr class="empty-row"><td colspan="${writeOk?8:7}">No entries yet.</td></tr>`}</tbody></table></div></div>`;
   const INVOICE_STATUS_OPTIONS = [
     'Invoice received', 'Submitted to Manager', 'Acknowledgement submitted to Finance',
     'Submitted via Email/Portal', 'Returned to Finance'
   ];
   const invFields = [
-    {k:'site_id',l:'Site',type:'site-search'},{k:'billing_month',l:'Billing month',type:'date'},{k:'invoice_amount',l:'Invoice amount',type:'number'},
+    {k:'site_id',l:'Site',type:'site-search'},{k:'billing_month',l:'Billing month',type:'month'},
+    {k:'invoice_submission_date',l:'Invoice Date',type:'date'},{k:'invoice_amount',l:'Invoice amount',type:'number'},
     {k:'invoice_status',l:'Invoice Status',type:'select',options:INVOICE_STATUS_OPTIONS},
     {k:'wcr_submitted',l:'WCR submitted',type:'checkbox'},{k:'remarks',l:'Remarks'}
   ];
@@ -1346,6 +1356,8 @@ async function renderInvoices(el){
   document.getElementById('addBtn').onclick = ()=> openForm('Invoice / WCR Entry', invFields, async(values)=>{
     if(values.invoice_amount!=='') values.invoice_amount=Number(values.invoice_amount); else delete values.invoice_amount;
     if(values.invoice_status==='') values.invoice_status = null;
+    if(values.billing_month && values.billing_month.length===7) values.billing_month += '-01';
+    if(values.invoice_submission_date==='') values.invoice_submission_date = null;
     const { error } = await sb.from('invoice_wcr_submissions').insert(values);
     if(error) alert('Save failed: '+error.message); else renderContent();
   });
@@ -1355,6 +1367,8 @@ async function renderInvoices(el){
       openForm('Invoice / WCR Entry', invFields, async(values)=>{
         if(values.invoice_amount!=='') values.invoice_amount=Number(values.invoice_amount); else delete values.invoice_amount;
         if(values.invoice_status==='') values.invoice_status = null;
+        if(values.billing_month && values.billing_month.length===7) values.billing_month += '-01';
+        if(values.invoice_submission_date==='') values.invoice_submission_date = null;
         const { error } = await sb.from('invoice_wcr_submissions').update(values).eq('id', row.id);
         if(error) alert('Update failed: '+error.message); else renderContent();
       }, row);
@@ -1372,7 +1386,7 @@ async function exportInvoiceReport(){
       return;
     }
     const { data, error } = await sb.from('invoice_wcr_submissions').select(`
-      billing_month, invoice_amount, invoice_status, invoice_submitted, remarks,
+      billing_month, invoice_amount, invoice_status, invoice_submitted, invoice_submission_date, invoice_status_updated_at, remarks,
       sites(site_name, projects(project_name, project_manager_id, org_hierarchy(full_name)))
     `).order('billing_month', { ascending: false });
     if(error) throw error;
@@ -1382,7 +1396,9 @@ async function exportInvoiceReport(){
       'Site Name': r.sites?.site_name || '—',
       'Manager Name': r.sites?.projects?.org_hierarchy?.full_name || 'Unassigned',
       'Invoice Status': r.invoice_status || (r.invoice_submitted ? 'Invoice received' : ''),
-      'Invoice Period': r.billing_month ? fmtDate(r.billing_month) : '',
+      'Status Updated Date': r.invoice_status_updated_at ? new Date(r.invoice_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
+      'Invoice Date': r.invoice_submission_date ? fmtDate(r.invoice_submission_date) : '',
+      'Invoice Period': r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '',
       'Invoice Value': r.invoice_amount || '',
       'Remarks': r.remarks || '',
     }));
@@ -2404,6 +2420,10 @@ async function openForm(title, fields, onSave, existingValues){
         <input type="hidden" data-k="${f.k}" value="${val!=null?esc(val):''}">
         <div class="model-list site-search-list" style="display:none; position:absolute; z-index:10; width:100%; background:var(--bg-1); margin-top:4px;"></div>
       </div>`;
+    }
+    if(f.type==='month'){
+      const monthVal = val!=null ? String(val).slice(0,7) : '';
+      return `<div class="field"><label>${f.l}</label><input data-k="${f.k}" type="month" value="${esc(monthVal)}"></div>`;
     }
     return `<div class="field"><label>${f.l}</label><input data-k="${f.k}" type="${f.type||'text'}" value="${val!=null?esc(val):''}"></div>`;
   }).join('');
