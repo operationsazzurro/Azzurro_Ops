@@ -1319,14 +1319,23 @@ async function renderInvoices(el){
   const rows = data||[];
   const writeOk = canWrite();
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Invoice & WCR Submissions (${rows.length})</div>
-    ${writeOk?'<div style="display:flex; gap:8px;"><button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Entry</button></div>':''}</div>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Month</th><th>Amount</th><th>Invoice Submitted</th><th>WCR Submitted</th>${writeOk?'<th></th>':''}</tr></thead>
-    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.billing_month)}</td><td>${r.invoice_amount?('AED '+r.invoice_amount):'—'}</td><td><span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span></td><td><span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="btn" id="exportInvoiceBtn">⬇ Export Excel</button>
+      ${writeOk?'<button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Entry</button>':''}
+    </div></div>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Month</th><th>Amount</th><th>Invoice Status</th><th>WCR Submitted</th>${writeOk?'<th></th>':''}</tr></thead>
+    <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.billing_month)}</td><td>${r.invoice_amount?('AED '+r.invoice_amount):'—'}</td><td>${r.invoice_status?`<span class="badge ${r.invoice_status==='Returned to Finance'?'open':r.invoice_status==='Acknowledgement submitted to Finance'?'done':'progress'}">${esc(r.invoice_status)}</span>`:`<span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span>`}</td><td><span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?6:5}">No entries yet.</td></tr>`}</tbody></table></div></div>`;
+  const INVOICE_STATUS_OPTIONS = [
+    'Invoice received', 'Submitted to Manager', 'Acknowledgement submitted to Finance',
+    'Submitted via Email/Portal', 'Returned to Finance'
+  ];
   const invFields = [
     {k:'site_id',l:'Site',type:'site-search'},{k:'billing_month',l:'Billing month',type:'date'},{k:'invoice_amount',l:'Invoice amount',type:'number'},
-    {k:'invoice_submitted',l:'Invoice submitted',type:'checkbox'},{k:'wcr_submitted',l:'WCR submitted',type:'checkbox'},{k:'remarks',l:'Remarks'}
+    {k:'invoice_status',l:'Invoice Status',type:'select',options:INVOICE_STATUS_OPTIONS},
+    {k:'wcr_submitted',l:'WCR submitted',type:'checkbox'},{k:'remarks',l:'Remarks'}
   ];
+  document.getElementById('exportInvoiceBtn').onclick = exportInvoiceReport;
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
       btn.onclick = ()=> deleteRecord('invoice_wcr_submissions', btn.dataset.deleteId, btn.dataset.deleteLabel);
@@ -1336,6 +1345,7 @@ async function renderInvoices(el){
   document.getElementById('importBtn').onclick = ()=> openBulkImport('invoice_wcr_submissions', invFields, 'Invoice & WCR (site_id must be a valid site UUID)');
   document.getElementById('addBtn').onclick = ()=> openForm('Invoice / WCR Entry', invFields, async(values)=>{
     if(values.invoice_amount!=='') values.invoice_amount=Number(values.invoice_amount); else delete values.invoice_amount;
+    if(values.invoice_status==='') values.invoice_status = null;
     const { error } = await sb.from('invoice_wcr_submissions').insert(values);
     if(error) alert('Save failed: '+error.message); else renderContent();
   });
@@ -1344,11 +1354,48 @@ async function renderInvoices(el){
       const row = rows[Number(btn.dataset.editIdx)];
       openForm('Invoice / WCR Entry', invFields, async(values)=>{
         if(values.invoice_amount!=='') values.invoice_amount=Number(values.invoice_amount); else delete values.invoice_amount;
+        if(values.invoice_status==='') values.invoice_status = null;
         const { error } = await sb.from('invoice_wcr_submissions').update(values).eq('id', row.id);
         if(error) alert('Update failed: '+error.message); else renderContent();
       }, row);
     };
   });
+}
+
+async function exportInvoiceReport(){
+  const btn = document.getElementById('exportInvoiceBtn');
+  const originalText = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Building report…';
+  try{
+    if(typeof XLSX === 'undefined'){
+      alert('The Excel export library failed to load — check your internet connection and try again.');
+      return;
+    }
+    const { data, error } = await sb.from('invoice_wcr_submissions').select(`
+      billing_month, invoice_amount, invoice_status, invoice_submitted, remarks,
+      sites(site_name, projects(project_name, project_manager_id, org_hierarchy(full_name)))
+    `).order('billing_month', { ascending: false });
+    if(error) throw error;
+
+    const rows = (data||[]).map(r=>({
+      'Project Name': r.sites?.projects?.project_name || '—',
+      'Site Name': r.sites?.site_name || '—',
+      'Manager Name': r.sites?.projects?.org_hierarchy?.full_name || 'Unassigned',
+      'Invoice Status': r.invoice_status || (r.invoice_submitted ? 'Invoice received' : ''),
+      'Invoice Period': r.billing_month ? fmtDate(r.billing_month) : '',
+      'Invoice Value': r.invoice_amount || '',
+      'Remarks': r.remarks || '',
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const sheet = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, sheet, 'Invoice & WCR');
+    XLSX.writeFile(wb, `Invoice_WCR_Report_${new Date().toISOString().slice(0,10)}.xlsx`);
+  }catch(e){
+    alert('Could not build report: ' + (e.message || e));
+  }finally{
+    btn.disabled = false; btn.textContent = originalText;
+  }
 }
 
 async function renderKPI(el){
