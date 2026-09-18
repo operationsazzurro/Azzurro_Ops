@@ -2457,7 +2457,7 @@ let bulkContext = null;
 function buildReferenceHTML(ref){
   if(!ref || !ref.rows || !ref.rows.length) return '';
   const rowsHtml = ref.rows.map(r => `
-    <tr>
+    <tr data-ref-label="${esc((r.label||'').toLowerCase())}">
       <td style="font-family:'JetBrains Mono',monospace; font-size:10px; white-space:nowrap;">
         <button class="copy-id-btn" data-copy="${esc(r.id)}" title="Copy ID">⧉</button> ${esc(r.id)}
       </td>
@@ -2466,12 +2466,14 @@ function buildReferenceHTML(ref){
   return `
     <div class="field">
       <label>${esc(ref.title)} — click ⧉ to copy the ID into your "${esc(ref.idColumnName)}" column</label>
+      <input type="text" id="bulkRefSearch" placeholder="Search..." style="margin-bottom:6px;">
       <div style="max-height:170px; overflow-y:auto; border:1px solid var(--panel-border); border-radius:8px;">
         <table style="width:100%; font-size:11.5px;">
           <thead><tr><th>ID</th><th>Name</th></tr></thead>
-          <tbody>${rowsHtml}</tbody>
+          <tbody id="bulkRefTbody">${rowsHtml}</tbody>
         </table>
       </div>
+      <p class="hint" id="bulkRefEmpty" style="display:none; margin-top:6px;">No matches.</p>
     </div>`;
 }
 function openBulkImport(table, fields, title, reference){
@@ -2489,6 +2491,20 @@ function openBulkImport(table, fields, title, reference){
       }
     };
   });
+  const refSearch = document.getElementById('bulkRefSearch');
+  if(refSearch){
+    refSearch.oninput = (e)=>{
+      const q = e.target.value.trim().toLowerCase();
+      const tbody = document.getElementById('bulkRefTbody');
+      let visibleCount = 0;
+      tbody.querySelectorAll('tr').forEach(tr=>{
+        const match = !q || (tr.dataset.refLabel||'').includes(q);
+        tr.style.display = match ? '' : 'none';
+        if(match) visibleCount++;
+      });
+      document.getElementById('bulkRefEmpty').style.display = visibleCount === 0 ? '' : 'none';
+    };
+  }
   document.getElementById('bulkFile').value = '';
   document.getElementById('bulkPaste').value = '';
   document.getElementById('bulkResult').textContent = '';
