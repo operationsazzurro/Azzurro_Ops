@@ -1332,38 +1332,52 @@ async function renderStaff(el){
 }
 
 async function renderInvoices(el){
-  const { data, error } = await sb.from('invoice_wcr_submissions').select('*, sites(site_name)').order('billing_month',{ascending:false});
+  const { data, error } = await sb.from('invoice_wcr_submissions').select('*, sites(site_name, projects(project_name, project_manager_id, org_hierarchy(full_name)))').order('billing_month',{ascending:false});
   if(error) throw error;
   const rows = data||[];
   const writeOk = canWrite();
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Invoice & WCR Submissions (${rows.length})</div>
     <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="btn" id="pendingWcrBtn">📋 Pending WCR by Manager</button>
       <button class="btn" id="exportInvoiceBtn">⬇ Export Excel</button>
       ${writeOk?'<button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Entry</button>':''}
     </div></div>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Billing Month</th><th>Invoice Date</th><th>Amount</th><th>Invoice Status</th><th>Status Updated</th><th>WCR Submitted</th>${writeOk?'<th></th>':''}</tr></thead>
-    <tbody>${rows.length? rows.map((r,i)=>`<tr>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Manager</th><th>Billing Month</th><th>WCR Status</th><th>Invoice Status</th><th>Invoice Date</th><th>Amount</th>${writeOk?'<th></th>':''}</tr></thead>
+    <tbody>${rows.length? rows.map((r,i)=>{
+      const mgr = r.sites?.projects?.org_hierarchy?.full_name || 'Unassigned';
+      const wcrBadge = r.wcr_status
+        ? `<span class="badge ${r.wcr_status==='Verified - Shared to Accounts'?'done':r.wcr_status==='Submitted to Coordinator'?'progress':'open'}">${esc(r.wcr_status)}</span>`
+        : `<span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span>`;
+      const invBadge = r.invoice_status
+        ? `<span class="badge ${(r.invoice_status==='Returned to Finance'||r.invoice_status==='Invoice not received')?'open':r.invoice_status==='Acknowledgement submitted to Finance'?'done':'progress'}">${esc(r.invoice_status)}</span>`
+        : `<span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span>`;
+      return `<tr>
         <td>${esc(r.sites?.site_name||'—')}</td>
+        <td>${esc(mgr)}</td>
         <td>${r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '—'}</td>
+        <td>${wcrBadge}</td>
+        <td>${invBadge}</td>
         <td>${fmtDate(r.invoice_submission_date)}</td>
         <td>${r.invoice_amount?('AED '+r.invoice_amount):'—'}</td>
-        <td>${r.invoice_status?`<span class="badge ${(r.invoice_status==='Returned to Finance'||r.invoice_status==='Invoice not received')?'open':r.invoice_status==='Acknowledgement submitted to Finance'?'done':'progress'}">${esc(r.invoice_status)}</span>`:`<span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span>`}</td>
-        <td>${r.invoice_status_updated_at ? new Date(r.invoice_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
-        <td><span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span></td>
         ${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}
-      </tr>`).join('')
+      </tr>`;
+    }).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?8:7}">No entries yet.</td></tr>`}</tbody></table></div></div>`;
+
+  const WCR_STATUS_OPTIONS = ['Not Submitted', 'Submitted to Coordinator', 'Verified - Shared to Accounts'];
   const INVOICE_STATUS_OPTIONS = [
     'Invoice not received', 'Invoice received', 'Submitted to Manager', 'Acknowledgement submitted to Finance',
     'Submitted via Email/Portal', 'Returned to Finance'
   ];
   const invFields = [
     {k:'site_id',l:'Site',type:'site-search'},{k:'billing_month',l:'Billing month',type:'month'},
+    {k:'wcr_status',l:'WCR / Timesheet Status',type:'select',options:WCR_STATUS_OPTIONS},
     {k:'invoice_submission_date',l:'Invoice Date',type:'date'},{k:'invoice_amount',l:'Invoice amount',type:'number'},
     {k:'invoice_status',l:'Invoice Status',type:'select',options:INVOICE_STATUS_OPTIONS},
-    {k:'wcr_submitted',l:'WCR submitted',type:'checkbox'},{k:'remarks',l:'Remarks'}
+    {k:'remarks',l:'Remarks'}
   ];
   document.getElementById('exportInvoiceBtn').onclick = exportInvoiceReport;
+  document.getElementById('pendingWcrBtn').onclick = openPendingWcrByManager;
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
       btn.onclick = ()=> deleteRecord('invoice_wcr_submissions', btn.dataset.deleteId, btn.dataset.deleteLabel);
@@ -1374,6 +1388,7 @@ async function renderInvoices(el){
   document.getElementById('addBtn').onclick = ()=> openForm('Invoice / WCR Entry', invFields, async(values)=>{
     if(values.invoice_amount!=='') values.invoice_amount=Number(values.invoice_amount); else delete values.invoice_amount;
     if(values.invoice_status==='') values.invoice_status = null;
+    if(values.wcr_status==='') values.wcr_status = null;
     if(values.billing_month && values.billing_month.length===7) values.billing_month += '-01';
     if(values.invoice_submission_date==='') values.invoice_submission_date = null;
     const { error } = await sb.from('invoice_wcr_submissions').insert(values);
@@ -1385,6 +1400,7 @@ async function renderInvoices(el){
       openForm('Invoice / WCR Entry', invFields, async(values)=>{
         if(values.invoice_amount!=='') values.invoice_amount=Number(values.invoice_amount); else delete values.invoice_amount;
         if(values.invoice_status==='') values.invoice_status = null;
+        if(values.wcr_status==='') values.wcr_status = null;
         if(values.billing_month && values.billing_month.length===7) values.billing_month += '-01';
         if(values.invoice_submission_date==='') values.invoice_submission_date = null;
         const { error } = await sb.from('invoice_wcr_submissions').update(values).eq('id', row.id);
@@ -1392,6 +1408,73 @@ async function renderInvoices(el){
       }, row);
     };
   });
+}
+
+async function openPendingWcrByManager(){
+  resetFormModalButtons();
+  document.getElementById('formTitle').textContent = 'Pending WCR by Manager';
+  const wrap = document.getElementById('formFields');
+  const currentMonth = new Date().toISOString().slice(0,7);
+  wrap.innerHTML = `
+    <div class="field"><label>Month</label><input id="pw_month" type="month" value="${currentMonth}"></div>
+    <div id="pw_results"><p class="hint">Loading…</p></div>
+  `;
+  document.getElementById('formModal').classList.add('show');
+  document.getElementById('saveForm').style.display = 'none';
+  document.getElementById('cancelForm').textContent = 'Close';
+  document.getElementById('cancelForm').onclick = ()=>{
+    document.getElementById('formModal').classList.remove('show');
+    document.getElementById('saveForm').style.display = '';
+    document.getElementById('saveForm').textContent = 'Save';
+    document.getElementById('cancelForm').textContent = 'Cancel';
+  };
+
+  async function loadForMonth(monthStr){
+    const resultsEl = document.getElementById('pw_results');
+    resultsEl.innerHTML = `<p class="hint">Loading…</p>`;
+    const monthStart = monthStr + '-01';
+    const [{ data: allSites, error: sErr }, { data: submissions, error: subErr }] = await Promise.all([
+      sb.from('sites').select('id, site_name, projects(project_name, project_manager_id, org_hierarchy(full_name))'),
+      sb.from('invoice_wcr_submissions').select('site_id, wcr_status, wcr_submitted').eq('billing_month', monthStart),
+    ]);
+    if(sErr || subErr){
+      resultsEl.innerHTML = `<p class="hint" style="color:var(--red);">Could not load: ${esc((sErr||subErr).message)}</p>`;
+      return;
+    }
+    const submittedSiteIds = new Set(
+      (submissions||[])
+        .filter(s => s.wcr_status === 'Submitted to Coordinator' || s.wcr_status === 'Verified - Shared to Accounts' || (!s.wcr_status && s.wcr_submitted))
+        .map(s => s.site_id)
+    );
+    const pendingSites = (allSites||[]).filter(s => !submittedSiteIds.has(s.id));
+
+    if(!pendingSites.length){
+      resultsEl.innerHTML = `<p class="hint" style="color:var(--cyan-bright);">Everyone's submitted for this month. Nothing pending.</p>`;
+      return;
+    }
+
+    const byManager = {};
+    pendingSites.forEach(s=>{
+      const mgr = s.projects?.org_hierarchy?.full_name || 'Unassigned';
+      if(!byManager[mgr]) byManager[mgr] = [];
+      byManager[mgr].push(s.site_name);
+    });
+
+    resultsEl.innerHTML = `
+      <p class="hint" style="margin-bottom:10px;">${pendingSites.length} site${pendingSites.length>1?'s':''} pending across ${Object.keys(byManager).length} manager${Object.keys(byManager).length>1?'s':''}:</p>
+      <div style="display:flex; flex-direction:column; gap:10px; max-height:360px; overflow-y:auto;">
+        ${Object.keys(byManager).sort().map(mgr=>`
+          <div style="border:1px solid var(--panel-border); border-radius:8px; padding:10px 12px;">
+            <div style="font-size:13px; color:var(--text-hi); font-weight:500; margin-bottom:4px;">${esc(mgr)} <span class="badge open" style="margin-left:6px;">${byManager[mgr].length} pending</span></div>
+            <div style="font-size:12px; color:var(--text-mid);">${byManager[mgr].map(esc).join(', ')}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  document.getElementById('pw_month').onchange = (e)=> loadForMonth(e.target.value);
+  loadForMonth(currentMonth);
 }
 
 async function exportInvoiceReport(){
@@ -1404,7 +1487,8 @@ async function exportInvoiceReport(){
       return;
     }
     const { data, error } = await sb.from('invoice_wcr_submissions').select(`
-      billing_month, invoice_amount, invoice_status, invoice_submitted, invoice_submission_date, invoice_status_updated_at, remarks,
+      billing_month, invoice_amount, invoice_status, invoice_submitted, invoice_submission_date, invoice_status_updated_at,
+      wcr_status, wcr_submitted, wcr_status_updated_at, remarks,
       sites(site_name, projects(project_name, project_manager_id, org_hierarchy(full_name)))
     `).order('billing_month', { ascending: false });
     if(error) throw error;
@@ -1413,10 +1497,12 @@ async function exportInvoiceReport(){
       'Project Name': r.sites?.projects?.project_name || '—',
       'Site Name': r.sites?.site_name || '—',
       'Manager Name': r.sites?.projects?.org_hierarchy?.full_name || 'Unassigned',
+      'Billing Month': r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '',
+      'WCR Status': r.wcr_status || (r.wcr_submitted ? 'Submitted to Coordinator' : 'Not Submitted'),
+      'WCR Status Updated': r.wcr_status_updated_at ? new Date(r.wcr_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
       'Invoice Status': r.invoice_status || (r.invoice_submitted ? 'Invoice received' : ''),
-      'Status Updated Date': r.invoice_status_updated_at ? new Date(r.invoice_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
+      'Invoice Status Updated': r.invoice_status_updated_at ? new Date(r.invoice_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
       'Invoice Date': r.invoice_submission_date ? fmtDate(r.invoice_submission_date) : '',
-      'Invoice Period': r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '',
       'Invoice Value': r.invoice_amount || '',
       'Remarks': r.remarks || '',
     }));
@@ -1431,6 +1517,7 @@ async function exportInvoiceReport(){
     btn.disabled = false; btn.textContent = originalText;
   }
 }
+
 
 async function renderKPI(el){
   const { data, error } = await sb.from('kpi_updates').select('*, sites(site_name)').order('review_month',{ascending:false});
