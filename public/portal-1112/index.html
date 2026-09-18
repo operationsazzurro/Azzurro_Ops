@@ -167,6 +167,16 @@
   @keyframes pulse{0%,100%{box-shadow:0 0 24px rgba(94,234,212,0.2);} 50%{box-shadow:0 0 40px rgba(94,234,212,0.5);}}
   @keyframes ring{0%{transform:scale(0.9); opacity:0.9;} 100%{transform:scale(1.6); opacity:0;}}
 
+  .hermes-status-dot{
+    position:absolute; top:2px; right:2px; width:11px; height:11px; border-radius:50%;
+    background:var(--text-dim); border:2px solid var(--bg-0); z-index:3;
+  }
+  .hermes-status-dot.active{background:#3ddc84; box-shadow:0 0 6px #3ddc84;}
+  .hermes-status-dot.checking{background:var(--amber); animation:pulse-dot 1s ease-in-out infinite;}
+  .hermes-status-dot.unreachable{background:var(--red);}
+  .hermes-status-dot.unconfigured{background:var(--text-dim);}
+  @keyframes pulse-dot{0%,100%{opacity:1;} 50%{opacity:0.35;}}
+
   .chat-panel{
     display:none; flex-direction:column; width:340px; height:440px;
     background:rgba(6,10,18,0.96); border:1px solid var(--panel-border-strong); border-radius:14px;
@@ -416,6 +426,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="#a8c0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
     </svg>
+    <span class="hermes-status-dot" id="hermesStatusDot" title="Hermes status: unknown"></span>
   </div>
   <div class="mic-btn" id="micBtn" title="Ask by voice">
     <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -430,6 +441,13 @@
 <div class="hermes-settings-modal" id="hermesSettingsModal">
   <div class="hermes-settings-panel">
     <h3>Hermes Connection</h3>
+    <div class="field" style="display:flex; align-items:center; justify-content:space-between; gap:10px; background:rgba(255,255,255,0.03); border:1px solid var(--panel-border); border-radius:8px; padding:9px 11px;">
+      <span style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--text-mid);">
+        <span id="hs_statusDot" style="width:10px; height:10px; border-radius:50%; background:var(--text-dim); flex-shrink:0;"></span>
+        <span id="hs_statusText">Not checked yet</span>
+      </span>
+      <button class="btn" id="hs_checkNow" style="width:auto; margin-top:0; padding:6px 12px; font-size:12px;">Check / Wake Up</button>
+    </div>
     <div class="field"><label>Hermes API URL</label><input id="hs_url" type="text" placeholder="https://your-app.onrender.com"></div>
     <div class="field"><label>API Server Key</label><input id="hs_key" type="password" placeholder="Bearer key"></div>
     <div class="field">
@@ -2587,6 +2605,75 @@ function getHermesConfig(){
 }
 function setHermesConfig(cfg){ localStorage.setItem(HERMES_CFG_KEY, JSON.stringify(cfg)); }
 
+// ---------- Hermes status check ----------
+function setHermesStatusDot(state){
+  const dot = document.getElementById('hermesStatusDot');
+  if(!dot) return;
+  dot.className = 'hermes-status-dot ' + state;
+  const labels = {
+    active: 'Hermes status: active',
+    checking: 'Hermes status: checking…',
+    unreachable: 'Hermes status: unreachable',
+    unconfigured: 'Hermes status: not connected yet',
+  };
+  dot.title = labels[state] || 'Hermes status: unknown';
+}
+
+async function checkHermesStatus(){
+  const cfg = getHermesConfig();
+  if(!cfg || !cfg.url){
+    setHermesStatusDot('unconfigured');
+    return { state: 'unconfigured' };
+  }
+  setHermesStatusDot('checking');
+  const start = performance.now();
+  try{
+    const controller = new AbortController();
+    const timeoutId = setTimeout(()=> controller.abort(), 60000); // allow up to 60s for a cold Render start
+    const res = await fetch(cfg.url + '/health', { signal: controller.signal });
+    clearTimeout(timeoutId);
+    const elapsedMs = Math.round(performance.now() - start);
+    if(res.ok){
+      setHermesStatusDot('active');
+      return { state: 'active', elapsedMs };
+    }
+    setHermesStatusDot('unreachable');
+    return { state: 'unreachable', elapsedMs, httpStatus: res.status };
+  }catch(e){
+    setHermesStatusDot('unreachable');
+    return { state: 'unreachable', error: e.message || String(e) };
+  }
+}
+
+function initHermesStatusChecks(){
+  checkHermesStatus();
+  setInterval(checkHermesStatus, 120000); // re-check every 2 minutes
+}
+
+function updateHermesStatusUI(result){
+  const dot = document.getElementById('hs_statusDot');
+  const text = document.getElementById('hs_statusText');
+  if(!dot || !text) return;
+  const cfg = getHermesConfig();
+  if(!cfg || !cfg.url){
+    dot.style.background = 'var(--text-dim)';
+    text.textContent = 'Not connected yet — enter a URL below and save.';
+    return;
+  }
+  if(!result){
+    dot.style.background = 'var(--text-dim)';
+    text.textContent = 'Not checked yet — click Check / Wake Up.';
+    return;
+  }
+  if(result.state === 'active'){
+    dot.style.background = '#3ddc84';
+    text.textContent = `Active (responded in ${(result.elapsedMs/1000).toFixed(1)}s)`;
+  } else {
+    dot.style.background = 'var(--red)';
+    text.textContent = 'Unreachable — it may be down, or still waking up. Try Check / Wake Up again in a moment.';
+  }
+}
+
 function promptHermesSetup(){
   openHermesSettingsModal();
 }
@@ -2651,6 +2738,17 @@ async function openHermesSettingsModal(){
     : 'No model selected — Hermes will use its own default.';
   document.getElementById('hs_modelSearch').value = '';
   modal.classList.add('show');
+
+  updateHermesStatusUI();
+  document.getElementById('hs_checkNow').onclick = async ()=>{
+    const btn = document.getElementById('hs_checkNow');
+    btn.disabled = true; btn.textContent = 'Checking…';
+    document.getElementById('hs_statusText').textContent = 'Checking — this can take up to a minute if it\'s asleep…';
+    document.getElementById('hs_statusDot').style.background = 'var(--amber)';
+    const result = await checkHermesStatus();
+    updateHermesStatusUI(result);
+    btn.disabled = false; btn.textContent = 'Check / Wake Up';
+  };
 
   const models = await fetchOpenRouterModels();
   renderModelList(models, hermesModelSelection);
@@ -2922,6 +3020,7 @@ async function bootGuest(){
   initVoice();
   initChatWidget();
   initTodoAlerts();
+  initHermesStatusChecks();
   await checkConnection();
   renderContent();
 }
@@ -2935,6 +3034,7 @@ async function bootAfterLogin(){
   initVoice();
   initChatWidget();
   initTodoAlerts();
+  initHermesStatusChecks();
 }
 
 function showLoginScreen(){
