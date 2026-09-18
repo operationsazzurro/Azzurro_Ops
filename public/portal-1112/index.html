@@ -1940,9 +1940,22 @@ function openFeedbackForm(sites, editingRow){
     const periodInput = document.getElementById('fb_period').value; // "YYYY-MM"
     if(!siteId){ alert('Please select a site.'); return; }
     if(!periodInput){ alert('Please select the reporting month.'); return; }
+    const reportingPeriod = periodInput + '-01';
+
+    // Warn before saving a second entry for the same site + month
+    let dupQuery = sb.from('customer_feedback').select('id').eq('site_id', siteId).eq('reporting_period', reportingPeriod);
+    if(editingRow) dupQuery = dupQuery.neq('id', editingRow.id);
+    const { data: dupes, error: dupErr } = await dupQuery;
+    if(!dupErr && dupes && dupes.length){
+      const siteName = sites.find(s=>s.id===siteId)?.site_name || 'this site';
+      const monthLabel = new Date(reportingPeriod).toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+      const proceed = window.confirm(`Feedback for ${siteName} in ${monthLabel} has already been recorded (${dupes.length} entr${dupes.length>1?'ies':'y'} found). Save this one anyway?`);
+      if(!proceed) return;
+    }
+
     const header = {
       site_id: siteId,
-      reporting_period: periodInput + '-01',
+      reporting_period: reportingPeriod,
       client_name: document.getElementById('fb_client').value || null,
       designation: document.getElementById('fb_designation').value || null,
       feedback_date: document.getElementById('fb_date').value || null,
