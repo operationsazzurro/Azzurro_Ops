@@ -2647,7 +2647,24 @@ async function checkHermesStatus(){
 
 function initHermesStatusChecks(){
   checkHermesStatus();
-  setInterval(checkHermesStatus, 120000); // re-check every 2 minutes
+  warmUpHermes();
+  setInterval(checkHermesStatus, 120000); // re-check every 2 minutes (health-only, cheap)
+}
+
+let hermesWarmedUpThisSession = false;
+async function warmUpHermes(){
+  // Primes the FULL chat pipeline (not just the container) once per page
+  // load, so the first real message someone types doesn't pay the full
+  // cold-start cost. Runs silently - failures here are not shown to the
+  // user, since the real chat request will surface its own error anyway
+  // if something is genuinely wrong.
+  if(hermesWarmedUpThisSession) return;
+  const cfg = getHermesConfig();
+  if(!cfg || !cfg.url) return;
+  hermesWarmedUpThisSession = true;
+  try{
+    await sendRawToHermes(cfg, [{ role:'user', content:'ping' }]);
+  }catch(e){ /* silent - background warm-up only */ }
 }
 
 function updateHermesStatusUI(result){
@@ -2772,6 +2789,8 @@ function initHermesSettingsModal(){
     }
     setHermesConfig({ url, key, model: hermesModelSelection || '' });
     hermesModelApplied = null; // force re-priming with /model on next message
+    hermesWarmedUpThisSession = false; // new endpoint, warm it up fresh
+    if(url) warmUpHermes();
     modal.classList.remove('show');
     appendChatMsg('agent', url
       ? `Connected${hermesModelSelection ? ' — using ' + hermesModelSelection : ''}. Ask me anything about your sites, complaints, feedback, or KPIs.`
