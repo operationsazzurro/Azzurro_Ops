@@ -1345,6 +1345,9 @@ async function renderInvoices(el){
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Manager</th><th>Billing Month</th><th>WCR Status</th><th>Invoice Status</th><th>Invoice Date</th><th>Amount</th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>{
       const mgr = r.sites?.projects?.org_hierarchy?.full_name || 'Unassigned';
+      const fmtUpdated = (ts)=> ts ? new Date(ts).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '';
+      const wcrUpdated = fmtUpdated(r.wcr_status_updated_at);
+      const invUpdated = fmtUpdated(r.invoice_status_updated_at);
       const wcrBadge = r.wcr_status
         ? `<span class="badge ${r.wcr_status==='Verified - Shared to Accounts'?'done':r.wcr_status==='Submitted to Coordinator'?'progress':'open'}">${esc(r.wcr_status)}</span>`
         : `<span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span>`;
@@ -1355,8 +1358,8 @@ async function renderInvoices(el){
         <td>${esc(r.sites?.site_name||'—')}</td>
         <td>${esc(mgr)}</td>
         <td>${r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '—'}</td>
-        <td>${wcrBadge}</td>
-        <td>${invBadge}</td>
+        <td>${wcrBadge}${wcrUpdated?`<div style="font-size:10.5px; color:var(--text-dim); margin-top:3px;">Updated ${wcrUpdated}</div>`:''}</td>
+        <td>${invBadge}${invUpdated?`<div style="font-size:10.5px; color:var(--text-dim); margin-top:3px;">Updated ${invUpdated}</div>`:''}</td>
         <td>${fmtDate(r.invoice_submission_date)}</td>
         <td>${r.invoice_amount?('AED '+r.invoice_amount):'—'}</td>
         ${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}
@@ -1384,7 +1387,7 @@ async function renderInvoices(el){
     });
   }
   if(!writeOk) return;
-  document.getElementById('importBtn').onclick = ()=> openBulkImport('invoice_wcr_submissions', invFields, 'Invoice & WCR (site_id must be a valid site UUID)');
+  document.getElementById('importBtn').onclick = async ()=>{ openBulkImport('invoice_wcr_submissions', invFields, 'Invoice & WCR (site_id must be a valid site UUID)', await sitesReferenceForImport()); };
   document.getElementById('addBtn').onclick = ()=> openForm('Invoice / WCR Entry', invFields, async(values)=>{
     if(values.invoice_amount!=='') values.invoice_amount=Number(values.invoice_amount); else delete values.invoice_amount;
     if(values.invoice_status==='') values.invoice_status = null;
@@ -1538,7 +1541,7 @@ async function renderKPI(el){
     });
   }
   if(!writeOk) return;
-  document.getElementById('importBtn').onclick = ()=> openBulkImport('kpi_updates', kpiFields, 'KPI Updates (site_id must be a valid site UUID)');
+  document.getElementById('importBtn').onclick = async ()=>{ openBulkImport('kpi_updates', kpiFields, 'KPI Updates (site_id must be a valid site UUID)', await sitesReferenceForImport()); };
   document.getElementById('addBtn').onclick = ()=> openForm('KPI Update', kpiFields, async(values)=>{
     if(values.kpi_score!=='') values.kpi_score=Number(values.kpi_score); else delete values.kpi_score;
     const { error } = await sb.from('kpi_updates').insert(values);
@@ -1576,7 +1579,7 @@ async function renderVisits(el){
     {k:'status',l:'Status',type:'select',options:['scheduled','completed','missed','rescheduled']},{k:'visit_notes',l:'Notes'}
   ];
   if(!writeOk) return;
-  document.getElementById('importBtn').onclick = ()=> openBulkImport('manager_site_visits', visitFields, 'Manager Visits (site_id must be a valid site UUID)');
+  document.getElementById('importBtn').onclick = async ()=>{ openBulkImport('manager_site_visits', visitFields, 'Manager Visits (site_id must be a valid site UUID)', await sitesReferenceForImport()); };
   document.getElementById('addBtn').onclick = ()=> openForm('Site Visit', visitFields, async(values)=>{
     const { error } = await sb.from('manager_site_visits').insert(values);
     if(error) alert('Save failed: '+error.message); else renderContent();
@@ -1614,7 +1617,7 @@ async function renderComplaints(el){
     {k:'description',l:'Description'},{k:'resolution_notes',l:'Resolution notes'}
   ];
   if(!writeOk) return;
-  document.getElementById('importBtn').onclick = ()=> openBulkImport('client_complaints', complaintFields, 'Complaints (site_id must be a valid site UUID)');
+  document.getElementById('importBtn').onclick = async ()=>{ openBulkImport('client_complaints', complaintFields, 'Complaints (site_id must be a valid site UUID)', await sitesReferenceForImport()); };
   document.getElementById('addBtn').onclick = ()=> openForm('Client Complaint', complaintFields, async(values)=>{
     const { error } = await sb.from('client_complaints').insert(values);
     if(error) alert('Save failed: '+error.message); else renderContent();
@@ -1652,7 +1655,7 @@ async function renderFollowups(el){
     {k:'notes',l:'Notes'}
   ];
   if(!writeOk) return;
-  document.getElementById('importBtn').onclick = ()=> openBulkImport('client_followups', followupFields, 'Follow-ups (site_id must be a valid site UUID)');
+  document.getElementById('importBtn').onclick = async ()=>{ openBulkImport('client_followups', followupFields, 'Follow-ups (site_id must be a valid site UUID)', await sitesReferenceForImport()); };
   document.getElementById('addBtn').onclick = ()=> openForm('Client Follow-up', followupFields, async(values)=>{
     const { error } = await sb.from('client_followups').insert(values);
     if(error) alert('Save failed: '+error.message); else renderContent();
@@ -2499,6 +2502,14 @@ async function getSitesForForms(){
   const { data } = await sb.from('sites').select('id, site_name').order('site_name');
   sitesCacheForForms = data || [];
   return sitesCacheForForms;
+}
+async function sitesReferenceForImport(){
+  const sites = await getSitesForForms();
+  return {
+    title: 'Existing Sites',
+    idColumnName: 'site_id',
+    rows: sites.map(s => ({ id: s.id, label: s.site_name })),
+  };
 }
 
 async function openForm(title, fields, onSave, existingValues){
