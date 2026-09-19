@@ -2175,10 +2175,59 @@ function openTodoSettingsForm(){
     </div>
     <div class="field"><label>Alert time — UAE time (UTC+4)</label><input id="ts_time" type="time" value="${settings.dailyTime}"></div>
     <p class="hint">While the app is open in your browser, this time triggers the in-app voice + popup alert.${isAdmin()?' As an admin, saving this also reschedules the server-side email alert (sent even when nobody has the app open) to fire at the same time.':' Only an admin can change when the server-side email alert fires.'}</p>
+    ${isAdmin() ? `
+    <div class="field"><label>CC on all reminder emails (optional)</label><input id="ts_ccEmail" type="text" placeholder="e.g. ops-oversight@company.com" value="Loading…" disabled></div>
+    <p class="hint">Applies to every reminder email sent from this app — personal task digests, manager-assigned task reminders, and site Timesheet/WCR reminders. Leave blank for no CC.</p>
+
+    <div style="border-top:1px solid var(--panel-border); margin:16px 0 12px; padding-top:12px;">
+      <div class="field">
+        <label><input type="checkbox" id="ts_wcrEnabled" style="width:auto; margin-right:8px;" disabled>Enable site Timesheet/WCR pending reminders</label>
+      </div>
+      <div class="field"><label>Send these reminders to</label>
+        <select id="ts_wcrMode" disabled>
+          <option value="managers">Concerned Site Managers (normal)</option>
+          <option value="test">A specific address (testing)</option>
+        </select>
+      </div>
+      <div class="field" id="ts_wcrTestEmailField" style="display:none;">
+        <label>Test address</label>
+        <input id="ts_wcrTestEmail" type="text" placeholder="you@company.com" disabled>
+        <p class="hint" style="margin-top:4px;">While in test mode, every Site Manager's reminder email is redirected here instead — content stays the same (one email per manager, listing their pending sites), just the recipient changes, so you can verify it without notifying real managers.</p>
+      </div>
+    </div>
+    ` : ''}
     <div id="ts_error" class="error"></div>
   `;
   document.getElementById('formModal').classList.add('show');
   document.getElementById('saveForm').textContent = 'Save';
+
+  if(isAdmin()){
+    sb.from('app_settings').select('key, value').in('key', [
+      'reminder_cc_email', 'wcr_reminders_enabled', 'wcr_reminder_mode', 'wcr_reminder_test_email'
+    ]).then(({data})=>{
+      const byKey = {};
+      (data||[]).forEach(row=> byKey[row.key] = row.value);
+
+      const ccInput = document.getElementById('ts_ccEmail');
+      ccInput.value = byKey.reminder_cc_email || '';
+      ccInput.disabled = false;
+
+      const wcrEnabled = byKey.wcr_reminders_enabled !== 'false'; // defaults to enabled
+      const wcrMode = byKey.wcr_reminder_mode || 'managers';
+      document.getElementById('ts_wcrEnabled').checked = wcrEnabled;
+      document.getElementById('ts_wcrEnabled').disabled = false;
+      document.getElementById('ts_wcrMode').value = wcrMode;
+      document.getElementById('ts_wcrMode').disabled = false;
+      document.getElementById('ts_wcrTestEmail').value = byKey.wcr_reminder_test_email || '';
+      document.getElementById('ts_wcrTestEmail').disabled = false;
+      document.getElementById('ts_wcrTestEmailField').style.display = wcrMode === 'test' ? '' : 'none';
+
+      document.getElementById('ts_wcrMode').onchange = (e)=>{
+        document.getElementById('ts_wcrTestEmailField').style.display = e.target.value === 'test' ? '' : 'none';
+      };
+    });
+  }
+
   document.getElementById('saveForm').onclick = async ()=>{
     const errEl = document.getElementById('ts_error');
     errEl.textContent = '';
@@ -2188,11 +2237,34 @@ function openTodoSettingsForm(){
     if(isAdmin()){
       const saveBtn = document.getElementById('saveForm');
       saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+
+      const wcrMode = document.getElementById('ts_wcrMode').value;
+      const wcrTestEmail = document.getElementById('ts_wcrTestEmail').value.trim();
+      if(wcrMode === 'test' && !wcrTestEmail){
+        saveBtn.disabled = false; saveBtn.textContent = 'Save';
+        errEl.textContent = 'Please enter a test address, or switch back to "Concerned Site Managers".';
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const settingsToSave = [
+        { key: 'reminder_cc_email', value: document.getElementById('ts_ccEmail').value.trim() || null, updated_at: now },
+        { key: 'wcr_reminders_enabled', value: String(document.getElementById('ts_wcrEnabled').checked), updated_at: now },
+        { key: 'wcr_reminder_mode', value: wcrMode, updated_at: now },
+        { key: 'wcr_reminder_test_email', value: wcrTestEmail || null, updated_at: now },
+      ];
+      const { error: settingsError } = await sb.from('app_settings').upsert(settingsToSave);
+      if(settingsError){
+        saveBtn.disabled = false; saveBtn.textContent = 'Save';
+        errEl.textContent = 'Could not save settings: ' + settingsError.message;
+        return;
+      }
+
       const [h, m] = dailyTime.split(':').map(Number);
       const { error } = await sb.rpc('reschedule_daily_task_digest', { new_hour_uae: h, new_minute_uae: m });
       saveBtn.disabled = false; saveBtn.textContent = 'Save';
       if(error){
-        errEl.textContent = 'Browser alert time saved, but the server email schedule could not be updated: ' + error.message;
+        errEl.textContent = 'Settings saved, but the server email schedule could not be updated: ' + error.message;
         return;
       }
     }
