@@ -2042,7 +2042,7 @@ function todoStatusBadge(task){
 }
 
 async function renderTodos(el){
-  const { data, error } = await sb.from('reminders').select('*, org_hierarchy(full_name)').order('due_date', { ascending: true });
+  const { data, error } = await sb.from('reminders').select('*, org_hierarchy!assigned_to(full_name)').order('due_date', { ascending: true });
   if(error) throw error;
   const rows = data || [];
 
