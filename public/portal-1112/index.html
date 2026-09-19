@@ -1234,14 +1234,14 @@ async function renderSites(el){
     });
   };
   document.getElementById('addBtn').onclick = async ()=>{
-    const { data: projects, error: pErr } = await sb.from('projects').select('id, project_name, project_code, contracts(clients(client_name))').order('project_name');
+    const { data: projects, error: pErr } = await sb.from('projects').select('id, project_name, project_code, project_manager_id, contracts(clients(client_name))').order('project_name');
     if(pErr){ alert('Could not load projects: '+pErr.message); return; }
     openSiteForm(projects||[]);
   };
   el.querySelectorAll('[data-edit-idx]').forEach(btn=>{
     btn.onclick = async ()=>{
       const row = rows[Number(btn.dataset.editIdx)];
-      const { data: projects, error: pErr } = await sb.from('projects').select('id, project_name, project_code, contracts(clients(client_name))').order('project_name');
+      const { data: projects, error: pErr } = await sb.from('projects').select('id, project_name, project_code, project_manager_id, contracts(clients(client_name))').order('project_name');
       if(pErr){ alert('Could not load projects: '+pErr.message); return; }
       openSiteForm(projects||[], row);
     };
@@ -1253,6 +1253,8 @@ function openSiteForm(projects, editingRow){
   document.getElementById('formTitle').textContent = editingRow ? 'Edit Site' : 'Add Site';
   const wrap = document.getElementById('formFields');
   const currentProjectId = editingRow ? editingRow.project_id : '';
+  const projectManagerById = {};
+  projects.forEach(p=>{ projectManagerById[p.id] = p.project_manager_id || ''; });
   const projectOptions = projects.map(p=>{
     const clientName = p.contracts?.clients?.client_name;
     const codePart = p.project_code ? ' ['+esc(p.project_code)+']' : '';
@@ -1269,8 +1271,36 @@ function openSiteForm(projects, editingRow){
     <div class="field"><label>Address</label><input id="sf_address" type="text" value="${editingRow&&editingRow.address?esc(editingRow.address):''}"></div>
     <div class="field"><label>Site type</label><input id="sf_type" type="text" placeholder="Office, Mall, Hospital..." value="${editingRow&&editingRow.site_type?esc(editingRow.site_type):''}"></div>
     <div class="field"><label>Manpower required</label><input id="sf_manpower" type="number" value="${editingRow&&editingRow.manpower_required!=null?editingRow.manpower_required:''}"></div>
+    <div class="field"><label>Site Manager</label><select id="sf_incharge"><option value="">— Not assigned —</option></select>
+      <p class="hint" style="margin-top:4px;">Defaults to the project's assigned manager — change the Project above to refresh it, or pick someone else manually. Receives daily reminder emails if this site's Timesheet/WCR submission is still pending for the month.</p>
+    </div>
+    <div class="field"><label>Submission requirement</label>
+      <select id="sf_requiresWcr">
+        <option value="false" ${!(editingRow&&editingRow.requires_wcr)?'selected':''}>Timesheet only</option>
+        <option value="true" ${editingRow&&editingRow.requires_wcr?'selected':''}>Timesheet & WCR</option>
+      </select>
+    </div>
   `;
   document.getElementById('formModal').classList.add('show');
+
+  getOrgPeopleForForms().then(people=>{
+    const sel = document.getElementById('sf_incharge');
+    people.forEach(p=>{
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.full_name + (p.designation ? ' — '+p.designation : '') + (!p.email ? ' (no email on file)' : '');
+      sel.appendChild(opt);
+    });
+    // Default: the site's own manager if already set (editing), otherwise
+    // whoever manages the currently-selected project.
+    const defaultManagerId = (editingRow && editingRow.site_incharge_id) || projectManagerById[currentProjectId] || '';
+    sel.value = defaultManagerId;
+  });
+
+  document.getElementById('sf_project').onchange = (e)=>{
+    document.getElementById('sf_incharge').value = projectManagerById[e.target.value] || '';
+  };
+
   document.getElementById('saveForm').onclick = async ()=>{
     const name = document.getElementById('sf_name').value;
     if(!name){ alert('Please enter the site name.'); return; }
@@ -1282,6 +1312,8 @@ function openSiteForm(projects, editingRow){
       address: document.getElementById('sf_address').value || null,
       site_type: document.getElementById('sf_type').value || null,
       manpower_required: document.getElementById('sf_manpower').value ? Number(document.getElementById('sf_manpower').value) : 0,
+      site_incharge_id: document.getElementById('sf_incharge').value || null,
+      requires_wcr: document.getElementById('sf_requiresWcr').value === 'true',
     };
     let result;
     if(editingRow) result = await sb.from('sites').update(site).eq('id', editingRow.id);
@@ -1332,25 +1364,33 @@ async function renderStaff(el){
 }
 
 async function renderInvoices(el){
-  const { data, error } = await sb.from('invoice_wcr_submissions').select('*, sites(site_name, projects(project_name, project_manager_id, org_hierarchy(full_name)))').order('billing_month',{ascending:false});
+  const { data, error } = await sb.from('invoice_wcr_submissions').select('*, sites(site_name, requires_wcr, site_incharge_id, projects(project_name, project_manager_id, org_hierarchy(full_name)))').order('billing_month',{ascending:false});
   if(error) throw error;
   const rows = data||[];
   const writeOk = canWrite();
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Invoice & WCR Submissions (${rows.length})</div>
     <div style="display:flex; gap:8px; flex-wrap:wrap;">
-      <button class="btn" id="pendingWcrBtn">📋 Pending WCR by Manager</button>
       <button class="btn" id="exportInvoiceBtn">⬇ Export Excel</button>
       ${writeOk?'<button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Entry</button>':''}
     </div></div>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Manager</th><th>Billing Month</th><th>WCR Status</th><th>Invoice Status</th><th>Invoice Date</th><th>Amount</th>${writeOk?'<th></th>':''}</tr></thead>
+    <p class="hint" style="margin-bottom:12px;">Each site's Submission Requirement (Timesheet only, or Timesheet & WCR) is set on the site itself — edit it from the Sites tab. The assigned Site Manager gets a daily reminder email until their site's required submission(s) for the month are marked Verified.</p>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Manager</th><th>Billing Month</th><th>Timesheet Status</th><th>WCR Status</th><th>Invoice Status</th><th>Invoice Date</th><th>Amount</th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>{
       const mgr = r.sites?.projects?.org_hierarchy?.full_name || 'Unassigned';
+      const requiresWcr = !!r.sites?.requires_wcr;
       const fmtUpdated = (ts)=> ts ? new Date(ts).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '';
+      const tsUpdated = fmtUpdated(r.timesheet_status_updated_at);
       const wcrUpdated = fmtUpdated(r.wcr_status_updated_at);
       const invUpdated = fmtUpdated(r.invoice_status_updated_at);
-      const wcrBadge = r.wcr_status
-        ? `<span class="badge ${r.wcr_status==='Verified - Shared to Accounts'?'done':r.wcr_status==='Submitted to Coordinator'?'progress':'open'}">${esc(r.wcr_status)}</span>`
-        : `<span class="badge ${r.wcr_submitted?'done':'open'}">${r.wcr_submitted?'Yes':'Pending'}</span>`;
+      const statusBadgeClass = (s)=> s==='Verified - Shared to Accounts'?'done':s==='Submitted to Coordinator'?'progress':'open';
+      const timesheetBadge = r.timesheet_status
+        ? `<span class="badge ${statusBadgeClass(r.timesheet_status)}">${esc(r.timesheet_status)}</span>`
+        : `<span class="badge open">Not Submitted</span>`;
+      const wcrBadge = !requiresWcr
+        ? `<span style="color:var(--text-dim); font-size:11.5px;">Not required</span>`
+        : (r.wcr_status
+          ? `<span class="badge ${statusBadgeClass(r.wcr_status)}">${esc(r.wcr_status)}</span>`
+          : `<span class="badge open">Not Submitted</span>`);
       const invBadge = r.invoice_status
         ? `<span class="badge ${(r.invoice_status==='Returned to Finance'||r.invoice_status==='Invoice not received')?'open':r.invoice_status==='Acknowledgement submitted to Finance'?'done':'progress'}">${esc(r.invoice_status)}</span>`
         : `<span class="badge ${r.invoice_submitted?'done':'open'}">${r.invoice_submitted?'Yes':'Pending'}</span>`;
@@ -1358,29 +1398,30 @@ async function renderInvoices(el){
         <td>${esc(r.sites?.site_name||'—')}</td>
         <td>${esc(mgr)}</td>
         <td>${r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '—'}</td>
-        <td>${wcrBadge}${wcrUpdated?`<div style="font-size:10.5px; color:var(--text-dim); margin-top:3px;">Updated ${wcrUpdated}</div>`:''}</td>
+        <td>${timesheetBadge}${tsUpdated?`<div style="font-size:10.5px; color:var(--text-dim); margin-top:3px;">Updated ${tsUpdated}</div>`:''}</td>
+        <td>${wcrBadge}${wcrUpdated&&requiresWcr?`<div style="font-size:10.5px; color:var(--text-dim); margin-top:3px;">Updated ${wcrUpdated}</div>`:''}</td>
         <td>${invBadge}${invUpdated?`<div style="font-size:10.5px; color:var(--text-dim); margin-top:3px;">Updated ${invUpdated}</div>`:''}</td>
         <td>${fmtDate(r.invoice_submission_date)}</td>
         <td>${r.invoice_amount?('AED '+r.invoice_amount):'—'}</td>
         ${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}
       </tr>`;
     }).join('')
-      : `<tr class="empty-row"><td colspan="${writeOk?8:7}">No entries yet.</td></tr>`}</tbody></table></div></div>`;
+      : `<tr class="empty-row"><td colspan="${writeOk?9:8}">No entries yet.</td></tr>`}</tbody></table></div></div>`;
 
-  const WCR_STATUS_OPTIONS = ['Not Submitted', 'Submitted to Coordinator', 'Verified - Shared to Accounts'];
+  const STATUS_OPTIONS = ['Not Submitted', 'Submitted to Coordinator', 'Verified - Shared to Accounts'];
   const INVOICE_STATUS_OPTIONS = [
     'Invoice not received', 'Invoice received', 'Submitted to Manager', 'Acknowledgement submitted to Finance',
     'Submitted via Email/Portal', 'Returned to Finance'
   ];
   const invFields = [
     {k:'site_id',l:'Site',type:'site-search'},{k:'billing_month',l:'Billing month',type:'month'},
-    {k:'wcr_status',l:'WCR / Timesheet Status',type:'select',options:WCR_STATUS_OPTIONS},
+    {k:'timesheet_status',l:'Timesheet Status',type:'select',options:STATUS_OPTIONS},
+    {k:'wcr_status',l:'WCR Status (if this site requires it)',type:'select',options:STATUS_OPTIONS},
     {k:'invoice_submission_date',l:'Invoice Date',type:'date'},{k:'invoice_amount',l:'Invoice amount',type:'number'},
     {k:'invoice_status',l:'Invoice Status',type:'select',options:INVOICE_STATUS_OPTIONS},
     {k:'remarks',l:'Remarks'}
   ];
   document.getElementById('exportInvoiceBtn').onclick = exportInvoiceReport;
-  document.getElementById('pendingWcrBtn').onclick = openPendingWcrByManager;
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
       btn.onclick = ()=> deleteRecord('invoice_wcr_submissions', btn.dataset.deleteId, btn.dataset.deleteLabel);
@@ -1392,6 +1433,7 @@ async function renderInvoices(el){
     if(values.invoice_amount!=='') values.invoice_amount=Number(values.invoice_amount); else delete values.invoice_amount;
     if(values.invoice_status==='') values.invoice_status = null;
     if(values.wcr_status==='') values.wcr_status = null;
+    if(values.timesheet_status==='') values.timesheet_status = null;
     if(values.billing_month && values.billing_month.length===7) values.billing_month += '-01';
     if(values.invoice_submission_date==='') values.invoice_submission_date = null;
     const { error } = await sb.from('invoice_wcr_submissions').insert(values);
@@ -1404,6 +1446,7 @@ async function renderInvoices(el){
         if(values.invoice_amount!=='') values.invoice_amount=Number(values.invoice_amount); else delete values.invoice_amount;
         if(values.invoice_status==='') values.invoice_status = null;
         if(values.wcr_status==='') values.wcr_status = null;
+        if(values.timesheet_status==='') values.timesheet_status = null;
         if(values.billing_month && values.billing_month.length===7) values.billing_month += '-01';
         if(values.invoice_submission_date==='') values.invoice_submission_date = null;
         const { error } = await sb.from('invoice_wcr_submissions').update(values).eq('id', row.id);
@@ -1411,73 +1454,6 @@ async function renderInvoices(el){
       }, row);
     };
   });
-}
-
-async function openPendingWcrByManager(){
-  resetFormModalButtons();
-  document.getElementById('formTitle').textContent = 'Pending WCR by Manager';
-  const wrap = document.getElementById('formFields');
-  const currentMonth = new Date().toISOString().slice(0,7);
-  wrap.innerHTML = `
-    <div class="field"><label>Month</label><input id="pw_month" type="month" value="${currentMonth}"></div>
-    <div id="pw_results"><p class="hint">Loading…</p></div>
-  `;
-  document.getElementById('formModal').classList.add('show');
-  document.getElementById('saveForm').style.display = 'none';
-  document.getElementById('cancelForm').textContent = 'Close';
-  document.getElementById('cancelForm').onclick = ()=>{
-    document.getElementById('formModal').classList.remove('show');
-    document.getElementById('saveForm').style.display = '';
-    document.getElementById('saveForm').textContent = 'Save';
-    document.getElementById('cancelForm').textContent = 'Cancel';
-  };
-
-  async function loadForMonth(monthStr){
-    const resultsEl = document.getElementById('pw_results');
-    resultsEl.innerHTML = `<p class="hint">Loading…</p>`;
-    const monthStart = monthStr + '-01';
-    const [{ data: allSites, error: sErr }, { data: submissions, error: subErr }] = await Promise.all([
-      sb.from('sites').select('id, site_name, projects(project_name, project_manager_id, org_hierarchy(full_name))'),
-      sb.from('invoice_wcr_submissions').select('site_id, wcr_status, wcr_submitted').eq('billing_month', monthStart),
-    ]);
-    if(sErr || subErr){
-      resultsEl.innerHTML = `<p class="hint" style="color:var(--red);">Could not load: ${esc((sErr||subErr).message)}</p>`;
-      return;
-    }
-    const submittedSiteIds = new Set(
-      (submissions||[])
-        .filter(s => s.wcr_status === 'Submitted to Coordinator' || s.wcr_status === 'Verified - Shared to Accounts' || (!s.wcr_status && s.wcr_submitted))
-        .map(s => s.site_id)
-    );
-    const pendingSites = (allSites||[]).filter(s => !submittedSiteIds.has(s.id));
-
-    if(!pendingSites.length){
-      resultsEl.innerHTML = `<p class="hint" style="color:var(--cyan-bright);">Everyone's submitted for this month. Nothing pending.</p>`;
-      return;
-    }
-
-    const byManager = {};
-    pendingSites.forEach(s=>{
-      const mgr = s.projects?.org_hierarchy?.full_name || 'Unassigned';
-      if(!byManager[mgr]) byManager[mgr] = [];
-      byManager[mgr].push(s.site_name);
-    });
-
-    resultsEl.innerHTML = `
-      <p class="hint" style="margin-bottom:10px;">${pendingSites.length} site${pendingSites.length>1?'s':''} pending across ${Object.keys(byManager).length} manager${Object.keys(byManager).length>1?'s':''}:</p>
-      <div style="display:flex; flex-direction:column; gap:10px; max-height:360px; overflow-y:auto;">
-        ${Object.keys(byManager).sort().map(mgr=>`
-          <div style="border:1px solid var(--panel-border); border-radius:8px; padding:10px 12px;">
-            <div style="font-size:13px; color:var(--text-hi); font-weight:500; margin-bottom:4px;">${esc(mgr)} <span class="badge open" style="margin-left:6px;">${byManager[mgr].length} pending</span></div>
-            <div style="font-size:12px; color:var(--text-mid);">${byManager[mgr].map(esc).join(', ')}</div>
-          </div>
-        `).join('')}
-      </div>
-    `;
-  }
-
-  document.getElementById('pw_month').onchange = (e)=> loadForMonth(e.target.value);
-  loadForMonth(currentMonth);
 }
 
 async function exportInvoiceReport(){
@@ -1491,8 +1467,8 @@ async function exportInvoiceReport(){
     }
     const { data, error } = await sb.from('invoice_wcr_submissions').select(`
       billing_month, invoice_amount, invoice_status, invoice_submitted, invoice_submission_date, invoice_status_updated_at,
-      wcr_status, wcr_submitted, wcr_status_updated_at, remarks,
-      sites(site_name, projects(project_name, project_manager_id, org_hierarchy(full_name)))
+      wcr_status, wcr_submitted, wcr_status_updated_at, timesheet_status, timesheet_status_updated_at, remarks,
+      sites(site_name, requires_wcr, projects(project_name, project_manager_id, org_hierarchy(full_name)))
     `).order('billing_month', { ascending: false });
     if(error) throw error;
 
@@ -1501,8 +1477,11 @@ async function exportInvoiceReport(){
       'Site Name': r.sites?.site_name || '—',
       'Manager Name': r.sites?.projects?.org_hierarchy?.full_name || 'Unassigned',
       'Billing Month': r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '',
-      'WCR Status': r.wcr_status || (r.wcr_submitted ? 'Submitted to Coordinator' : 'Not Submitted'),
-      'WCR Status Updated': r.wcr_status_updated_at ? new Date(r.wcr_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
+      'Timesheet Status': r.timesheet_status || 'Not Submitted',
+      'Timesheet Status Updated': r.timesheet_status_updated_at ? new Date(r.timesheet_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
+      'WCR Required': r.sites?.requires_wcr ? 'Yes' : 'No',
+      'WCR Status': r.sites?.requires_wcr ? (r.wcr_status || (r.wcr_submitted ? 'Submitted to Coordinator' : 'Not Submitted')) : 'N/A',
+      'WCR Status Updated': r.sites?.requires_wcr ? (r.wcr_status_updated_at ? new Date(r.wcr_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : '',
       'Invoice Status': r.invoice_status || (r.invoice_submitted ? 'Invoice received' : ''),
       'Invoice Status Updated': r.invoice_status_updated_at ? new Date(r.invoice_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
       'Invoice Date': r.invoice_submission_date ? fmtDate(r.invoice_submission_date) : '',
@@ -2063,7 +2042,7 @@ function todoStatusBadge(task){
 }
 
 async function renderTodos(el){
-  const { data, error } = await sb.from('reminders').select('*').order('due_date', { ascending: true });
+  const { data, error } = await sb.from('reminders').select('*, org_hierarchy(full_name)').order('due_date', { ascending: true });
   if(error) throw error;
   const rows = data || [];
 
@@ -2087,12 +2066,13 @@ async function renderTodos(el){
         <button class="btn btn-primary" id="addTodoBtn">+ Add Task</button>
       </div>
     </div>
-    <p class="hint" style="margin-bottom:12px;">Every day at <b>${settings.dailyTime} (UAE time)</b>${settings.enabled?'':' (currently off)'}, this app announces your own pending tasks out loud (your browser's voice) and pops up a summary while it's open — and, separately, an email digest goes out at the same time to your own email even if nobody has the app open. Individual tasks also get their own alert the moment they become overdue. Tasks stay listed here — nothing disappears until marked done. Your tasks are private to you; admins can see and manage everyone's for oversight.</p>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Date Added</th>${isAdmin()?'<th>Owner</th>':''}<th>Task</th><th>Due</th><th>Status</th><th></th></tr></thead>
+    <p class="hint" style="margin-bottom:12px;">Every day at <b>${settings.dailyTime} (UAE time)</b>${settings.enabled?'':' (currently off)'}, this app announces your own pending tasks out loud (your browser's voice) and pops up a summary while it's open — and, separately, an email digest goes out at the same time to your own email even if nobody has the app open. Individual tasks also get their own alert the moment they become overdue. If a task is assigned to a manager, they get a daily reminder email once it's overdue, until it's marked complete. Tasks stay listed here — nothing disappears until marked done. Your tasks are private to you; admins can see and manage everyone's for oversight.</p>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Date Added</th>${isAdmin()?'<th>Owner</th>':''}<th>Task</th><th>Assigned To</th><th>Due</th><th>Status</th><th></th></tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>`<tr>
         <td>${fmtDate(r.created_at)}</td>
         ${isAdmin()?`<td>${r.owner_id ? esc(ownerEmailById[r.owner_id]||'—') : '<span style="color:var(--text-dim);">Unowned (legacy)</span>'}</td>`:''}
         <td>${esc(r.title)}${r.description?`<div style="color:var(--text-dim); font-size:11.5px; margin-top:2px;">${esc(r.description)}</div>`:''}</td>
+        <td>${r.org_hierarchy?.full_name ? esc(r.org_hierarchy.full_name) : '<span style="color:var(--text-dim);">—</span>'}</td>
         <td>${r.due_date ? new Date(r.due_date).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
         <td>${todoStatusBadge(r)}</td>
         <td>
@@ -2101,7 +2081,7 @@ async function renderTodos(el){
           ${canManage(r)?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="this task" title="Delete">🗑</button>`:''}
         </td>
       </tr>`).join('')
-      : `<tr class="empty-row"><td colspan="${isAdmin()?6:5}">No tasks yet. Click + Add Task to create one.</td></tr>`}
+      : `<tr class="empty-row"><td colspan="${isAdmin()?7:6}">No tasks yet. Click + Add Task to create one.</td></tr>`}
     </tbody></table></div>
   </div>`;
 
@@ -2137,9 +2117,24 @@ function openTodoForm(editingRow){
     <div class="field"><label>Notes (optional)</label><textarea id="td_desc" rows="3">${editingRow&&editingRow.description?esc(editingRow.description):''}</textarea></div>
     <div class="field"><label>Due date</label><input id="td_dueDate" type="date" value="${dueDateVal}"></div>
     <div class="field"><label>Due time</label><input id="td_dueTime" type="time" value="${dueTimeVal || '17:00'}"></div>
+    <div class="field"><label>Assign to manager (optional)</label><select id="td_assignedTo"><option value="">— Just for me —</option></select>
+      <p class="hint" style="margin-top:4px;">If assigned, they'll get a daily reminder email once this task is overdue, until it's marked complete — even if they don't use this app.</p>
+    </div>
     <div id="td_error" class="error"></div>
   `;
   document.getElementById('formModal').classList.add('show');
+
+  getOrgPeopleForForms().then(people=>{
+    const sel = document.getElementById('td_assignedTo');
+    people.forEach(p=>{
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.full_name + (p.designation ? ' — '+p.designation : '') + (!p.email ? ' (no email on file)' : '');
+      if(editingRow && editingRow.assigned_to === p.id) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  });
+
   document.getElementById('saveForm').onclick = async ()=>{
     const errEl = document.getElementById('td_error');
     errEl.textContent = '';
@@ -2153,6 +2148,7 @@ function openTodoForm(editingRow){
       title,
       description: document.getElementById('td_desc').value || null,
       due_date: dueDateTime.toISOString(),
+      assigned_to: document.getElementById('td_assignedTo').value || null,
     };
     let result;
     if(editingRow) result = await sb.from('reminders').update(values).eq('id', editingRow.id);
@@ -2539,6 +2535,13 @@ async function sitesReferenceForImport(){
     idColumnName: 'site_id',
     rows: sites.map(s => ({ id: s.id, label: s.site_name })),
   };
+}
+let orgPeopleCacheForForms = null;
+async function getOrgPeopleForForms(){
+  if(orgPeopleCacheForForms) return orgPeopleCacheForForms;
+  const { data } = await sb.from('org_hierarchy').select('id, full_name, designation, email').order('full_name');
+  orgPeopleCacheForForms = data || [];
+  return orgPeopleCacheForForms;
 }
 
 async function openForm(title, fields, onSave, existingValues){
