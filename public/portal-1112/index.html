@@ -562,7 +562,6 @@ button,[role="button"],.mic-btn{touch-action:manipulation}
     <div class="answer" id="voiceAnswer"></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
       <button class="btn" id="enableResponseAudio" type="button">Enable / test audio</button>
-      <button class="btn" id="resumeVoiceInput" type="button">Resume microphone</button>
       <button class="btn" id="replayResponseAudio" type="button">Play last response</button>
     </div>
     <div id="responseAudioStatus" role="status" style="font-size:12px;margin-top:6px">On iPhone, tap Enable / test audio once after signing in.</div>
@@ -3595,10 +3594,10 @@ class LocalWhisperRecognition {
     stream.getAudioTracks().forEach(t=>{
       t.onmute=()=>{if(this.active){localVoiceStatus('Microphone temporarily interrupted — waiting for audio to resume');setTimeout(recoverVoiceInput,800);}};
       t.onunmute=()=>{if(this.active){localVoiceStatus('Microphone restored — listening on this device');recoverVoiceInput();}};
-      t.onended=()=>{if(this.active)this.fail('audio-capture','Microphone disconnected. Tap Resume microphone to reconnect.');};
+      t.onended=()=>{if(this.active)this.fail('audio-capture','Microphone disconnected. Tap the microphone icon or AZZURRO ORB to reconnect.');};
     });
     this.context.onstatechange=()=>{
-      if(this.active && this.context?.state!=='running')localVoiceStatus('Audio input paused — tap Resume microphone if it does not resume after playback.');
+      if(this.active && this.context?.state!=='running')localVoiceStatus('Audio input paused — tap the microphone icon or AZZURRO ORB if it does not resume after playback.');
     };
     localVoiceStatus('Local model ready • Listening on this device');this.onstart?.();
   }
@@ -3737,13 +3736,46 @@ function recoverVoiceInput(){
       localVoiceStatus('Resuming microphone audio…');
       context.resume().then(()=>{
         if(recognizer!==owner || !currentUser || !wakeWordMode)return;
-        localVoiceStatus(context.state==='running'?'Microphone restored — wake-word detection active':'Audio is paused by the browser. Tap Resume microphone.');
-      }).catch(()=>localVoiceStatus('Audio is paused by the browser. Tap Resume microphone.'));
+        localVoiceStatus(context.state==='running'?'Microphone restored — wake-word detection active':'Audio is paused by the browser. Tap the microphone icon or AZZURRO ORB.');
+      }).catch(()=>localVoiceStatus('Audio is paused by the browser. Tap the microphone icon or AZZURRO ORB.'));
     }
-    if(owner.stream?.getAudioTracks().some(t=>t.muted))localVoiceStatus('Microphone interrupted by the browser. Tap Resume microphone if it does not return.');
+    if(owner.stream?.getAudioTracks().some(t=>t.muted))localVoiceStatus('Microphone interrupted by the browser. Tap the microphone icon or AZZURRO ORB if it does not return.');
   }else if(!voiceRunning && !voiceStarting){
     startVoiceRecognition(false);
   }
+}
+function voiceInputNeedsRecovery(){
+  if(!recognizer)return true;
+  if(recognizer instanceof LocalWhisperRecognition){
+    const tracks=recognizer.stream?.getAudioTracks?.() || [];
+    return !recognizer.active || recognizer.context?.state!=='running' ||
+      !tracks.length || tracks.some(t=>t.muted || t.readyState==='ended');
+  }
+  return !voiceRunning && !voiceStarting;
+}
+function resumeVoiceFromIcon(){
+  if(!currentUser){lockVoiceUntilSignIn();return false;}
+  if(!recognizer)initVoice();
+  wakeWordMode=true;
+  commandSessionActive=false;
+  commandSessionStarted=false;
+  if(recognizer instanceof LocalWhisperRecognition){
+    const tracks=recognizer.stream?.getAudioTracks?.() || [];
+    const mustReconnect=!recognizer.active || !tracks.length ||
+      tracks.some(t=>t.muted || t.readyState==='ended');
+    if(mustReconnect){
+      try{recognizer.abort();}catch(e){}
+      voiceStarting=false;voiceRunning=false;
+      startVoiceRecognition(false);
+    }else recoverVoiceInput();
+  }else recoverVoiceInput();
+  micBtn.classList.add('listening');
+  micBtn.title='Wake-word standby active — say Hey Sara';
+  voiceHeard.textContent='Microphone resumed — wake-word standby';
+  voiceAnswer.textContent='Say Hey Sara to open a 10-second command window.';
+  localVoiceStatus('Microphone resuming — wake-word detection active');
+  setOrbState('listening','HEY SARA STANDBY');
+  return true;
 }
 function startVoiceRecognition(manual=false){
   if(!currentUser || !recognizer || voiceStarting || voiceRunning || (!wakeWordMode && !manual)) return;
@@ -3926,6 +3958,10 @@ function initVoice(engineOverride){
     if(!currentUser){lockVoiceUntilSignIn();micBtn.onclick();return;}
     voiceLastError='';
     voiceBox.classList.add('show');
+    if(voiceInputNeedsRecovery()){
+      resumeVoiceFromIcon();
+      return;
+    }
     if(wakeWordMode && commandSessionActive){
       window.speechSynthesis?.cancel();
       enterVoiceStandby();
@@ -4079,14 +4115,6 @@ for(const [id,label] of [['micBtn','Voice command standby or activate'],['chatTo
   const control=document.getElementById(id);control.setAttribute('role','button');control.setAttribute('tabindex','0');control.setAttribute('aria-label',label);
   control.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();control.click();}});
 }
-document.getElementById('resumeVoiceInput').onclick=()=>{
-  if(!currentUser){localVoiceStatus('Sign in to resume the microphone.');return;}
-  if(!recognizer)initVoice();
-  if(!wakeWordMode){micBtn.onclick();return;}
-  if(recognizer instanceof LocalWhisperRecognition && recognizer.stream?.getAudioTracks().some(t=>t.muted || t.readyState==='ended')){
-    recognizer.abort();voiceStarting=false;voiceRunning=false;startVoiceRecognition(false);
-  }else recoverVoiceInput();
-};
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')recoverVoiceInput();});
 window.addEventListener('pageshow',recoverVoiceInput);
 // Mobile panels remain dismissible without changing microphone state.
