@@ -3540,6 +3540,37 @@ function initVoice(){
       voiceAnswer.textContent='';
     }
   };
+  // Auto-start only with browser-confirmed permission; never prompt on every load.
+  // No stored preference can substitute for an actual microphone permission grant.
+  async function autoStartVoice(){
+    try{
+      if(!navigator.permissions?.query) throw new Error('permission-query-unavailable');
+      const permission=await navigator.permissions.query({name:'microphone'});
+      const startIfGranted=()=>{
+        if(permission.state==='granted' && !wakeWordMode){
+          micBtn.onclick();
+        }else if(permission.state==='denied'){
+          voiceBox.classList.add('show');
+          voiceHeard.textContent='Microphone access is blocked';
+          voiceAnswer.textContent='Allow microphone access in this site’s browser settings. Listening starts automatically when access is granted.';
+        }else if(permission.state==='prompt'){
+          voiceBox.classList.add('show');
+          voiceHeard.textContent='Enable microphone once';
+          voiceAnswer.textContent='Click the ORB or microphone and allow access for this site. Future page loads automatically enable Hey Sara listening when permission is retained.';
+        }
+      };
+      permission.onchange=()=>{
+        if(permission.state!=='granted' && wakeWordMode) micBtn.onclick();
+        startIfGranted();
+      };
+      startIfGranted();
+    }catch(e){
+      voiceBox.classList.add('show');
+      voiceHeard.textContent='Click the ORB to enable listening';
+      voiceAnswer.textContent='This browser cannot confirm saved microphone permission automatically. Click the ORB or microphone to start.';
+    }
+  }
+  autoStartVoice();
 }
 
 // ---------- auth ----------
