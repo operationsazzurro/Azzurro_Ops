@@ -560,6 +560,11 @@ button,[role="button"],.mic-btn{touch-action:manipulation}
       <div style="font-size:11px;margin-top:6px">Whisper displays text after a pause; browser speech can show words as you speak. These transcripts are not saved.</div>
     </div>
     <div class="answer" id="voiceAnswer"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn" id="enableResponseAudio" type="button">Enable / test audio</button>
+      <button class="btn" id="replayResponseAudio" type="button">Play last response</button>
+    </div>
+    <div id="responseAudioStatus" role="status" style="font-size:12px;margin-top:6px">On iPhone, tap Enable / test audio once after signing in.</div>
     <label for="voiceEngine" style="display:block;margin-top:12px">Speech engine</label>
     <select id="voiceEngine" style="width:100%;padding:8px;background:#11233a;color:white;border:1px solid #55718d;border-radius:6px"><option value="local">On-device Whisper (no speech service)</option><option value="browser">Browser speech service</option></select>
     <div id="voiceEngineStatus" role="status" aria-live="polite" style="margin-top:8px;font-size:12px">Local recognition downloads a model on first use. No installation or API key. Keep this tab open; wait for “Listening”.</div>
@@ -786,8 +791,7 @@ function commandNavigate(raw){
 
 function speakCommandAck(id){
   const t=(visibleTabs().find(x=>x.id===id)||{label:id}).label;
-  setOrbState('speaking','OPENING '+t);
-  try{ if('speechSynthesis' in window){ speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance('Opening '+t); u.rate=1.02; u.onend=()=>setOrbState(wakeWordMode?'listening':'',wakeWordMode?(commandSessionActive?'COMMAND LISTENING ACTIVE':'HEY SARA READY'):'OPERATIONS AI ONLINE'); speechSynthesis.speak(u); } else setTimeout(()=>setOrbState('', 'OPERATIONS AI ONLINE'),700); }catch(e){setOrbState('', 'OPERATIONS AI ONLINE')}
+  speak('Opening '+t);
 }
 
 async function renderContent(){
@@ -3401,14 +3405,67 @@ const voiceBox = document.getElementById('voiceBox');
 const voiceHeard = document.getElementById('voiceHeard');
 const voiceAnswer = document.getElementById('voiceAnswer');
 
-function speak(text){
-  try{
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = 1.0;
-    window.speechSynthesis.speak(u);
-  }catch(e){}
+let activeResponseUtterance=null;
+let lastSpokenResponse='';
+let responseSpeechSerial=0;
+let responseStartTimer=null;
+function responseAudioStatus(text){
+  document.getElementById('responseAudioStatus').textContent=text;
 }
+function speak(text,remember=true){
+  if(!currentUser)return;
+  const clean=String(text||'').trim();if(!clean)return;
+  if(remember)lastSpokenResponse=clean;
+  const synth=window.speechSynthesis;
+  if(!synth || !window.SpeechSynthesisUtterance){responseAudioStatus('Speech playback is unavailable in this browser. Open the app directly in Safari.');return;}
+  const serial=++responseSpeechSerial;
+  clearTimeout(responseStartTimer);
+  try{
+    synth.cancel();
+    const u=new window.SpeechSynthesisUtterance(clean);
+    activeResponseUtterance=u; // Retain the utterance for the full playback lifetime.
+    u.lang='en-US';u.volume=1;u.rate=1;u.pitch=1;
+    const voices=synth.getVoices();
+    const voice=voices.find(v=>v.localService && /^en[-_]/i.test(v.lang)) || voices.find(v=>/^en[-_]/i.test(v.lang));
+    if(voice){u.voice=voice;u.lang=voice.lang;}
+    u.onstart=()=>{
+      if(serial!==responseSpeechSerial)return;
+      clearTimeout(responseStartTimer);
+      responseAudioStatus('Playing response. If silent, raise media volume and check the audio output.');
+      setOrbState('speaking','AZZURRO RESPONDING');
+    };
+    u.onend=()=>{
+      if(serial!==responseSpeechSerial)return;
+      clearTimeout(responseStartTimer);activeResponseUtterance=null;
+      responseAudioStatus('Playback finished. Tap Play last response to hear it again.');
+      setOrbState(wakeWordMode?'listening':'',wakeWordMode?(commandSessionActive?'COMMAND LISTENING ACTIVE':'HEY SARA STANDBY'):'OPERATIONS AI ONLINE');
+    };
+    u.onerror=e=>{
+      if(serial!==responseSpeechSerial)return;
+      clearTimeout(responseStartTimer);activeResponseUtterance=null;
+      responseAudioStatus('Audio could not play ('+(e.error||'unknown error')+'). Tap Play last response to retry directly.');
+    };
+    responseAudioStatus('Starting audio…');
+    responseStartTimer=setTimeout(()=>{
+      if(serial===responseSpeechSerial)responseAudioStatus('Audio has not started. Tap Play last response; your browser may require a direct tap.');
+    },4000);
+    // Runs synchronously in the tap handler for Enable/Test and Replay.
+    synth.speak(u);
+    if(synth.paused)synth.resume();
+  }catch(e){
+    clearTimeout(responseStartTimer);
+    responseAudioStatus('Audio error: '+(e.message||e)+'. Tap Play last response to retry.');
+  }
+}
+document.getElementById('enableResponseAudio').onclick=()=>{
+  if(!currentUser){responseAudioStatus('Sign in first, then tap Enable / test audio.');return;}
+  speak('Audio test. This is Sara. Can you hear me?',false);
+};
+document.getElementById('replayResponseAudio').onclick=()=>{
+  if(!currentUser){responseAudioStatus('Sign in to play responses.');return;}
+  if(lastSpokenResponse)speak(lastSpokenResponse);
+  else responseAudioStatus('No spoken response yet. Tap Enable / test audio first.');
+};
 
 async function answerQuery(q){
   const query = q.toLowerCase();
@@ -3683,6 +3740,9 @@ function armWakeCommandWindow(){
 
 function lockVoiceUntilSignIn(){
   ++voiceAuthEpoch;
+  ++responseSpeechSerial;clearTimeout(responseStartTimer);
+  activeResponseUtterance=null;lastSpokenResponse='';
+  responseAudioStatus('Sign in, then tap Enable / test audio.');
   wakeWordMode=false;commandSessionActive=false;commandSessionStarted=false;
   awaitingWakeCommand=false;wakeCommandDeadline=0;voiceBusy=false;
   clearTimeout(voiceRestartTimer);clearTimeout(wakeCommandTimer);
