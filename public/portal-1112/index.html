@@ -770,7 +770,7 @@ async function enhanceCommandDashboard(el){
         </div>
         <div class="orb-title">AZZURRO</div>
         <div class="orb-status" id="commandOrbStatus">OPERATIONS AI ONLINE</div>
-        <div class="orb-prompt" id="commandOrbPrompt">Say “Hey Saara”, “Hi Sara”, or “Hey Sara” followed by a command, or ask a question. Navigation is handled instantly; reasoning and operational questions are sent to Hermes.</div>
+        <div class="orb-prompt" id="commandOrbPrompt">Always-on standby while this tab is active. Say “Hey Saara”, “Hi Sara”, or “Hey Sara” before each command or question. Navigation is handled instantly; reasoning and operational questions are sent to Hermes.</div>
         <div class="command-input"><input id="commandInput" placeholder="Ask or speak a command…" autocomplete="off"><button class="btn btn-primary" id="commandSend">Execute</button></div>
         <div class="command-quick">
           <button class="quick-chip" data-cmd="Open complaints">Open Complaints</button><button class="quick-chip" data-cmd="Open KPI">Open KPI</button><button class="quick-chip" data-cmd="Open staff">Open Staff</button><button class="quick-chip" data-cmd="Open manager visits">Manager Visits</button>
@@ -3494,6 +3494,7 @@ let wakeWordMode = false;
 let voiceManualSession = false;
 let voiceRestartTimer = null;
 let awaitingWakeCommand = false;
+let wakeCommandDeadline = 0;
 let wakeCommandTimer = null;
 const WAKE_WORD = 'hey sara';
 const WAKE_COMMAND_TIMEOUT_MS = 20000;
@@ -3507,6 +3508,17 @@ function stripWakeWord(text){
   if(!match) return null;
   return n.slice(match.index+match[0].length).trim();
 }
+function gateWakeTranscript(transcript){
+  if(!wakeWordMode)return {kind:'ignore'};
+  const afterWake=stripWakeWord(transcript);
+  if(afterWake!==null)return afterWake ? {kind:'command',command:afterWake} : {kind:'wake'};
+  if(awaitingWakeCommand && Date.now()<=wakeCommandDeadline){
+    return {kind:'command',command:transcript.trim()};
+  }
+  awaitingWakeCommand=false;
+  wakeCommandDeadline=0;
+  return {kind:'ignore'};
+}
 function startVoiceRecognition(manual=false){
   if(!recognizer || voiceStarting || voiceRunning || (!wakeWordMode && !manual)) return;
   clearTimeout(voiceRestartTimer);
@@ -3519,6 +3531,7 @@ function startVoiceRecognition(manual=false){
 }
 function armWakeCommandWindow(){
   awaitingWakeCommand = true;
+  wakeCommandDeadline = Date.now()+WAKE_COMMAND_TIMEOUT_MS;
   clearTimeout(wakeCommandTimer);
   voiceBox.classList.add('show');
   voiceHeard.textContent='Hey Sara detected';
@@ -3527,6 +3540,8 @@ function armWakeCommandWindow(){
   speak('Yes?');
   wakeCommandTimer=setTimeout(()=>{
     awaitingWakeCommand=false;
+    wakeCommandDeadline=0;
+    voiceAnswer.textContent='No command received. Waiting for Hey Sara.';
     setOrbState('', wakeWordMode?'HEY SARA READY':'OPERATIONS AI ONLINE');
   }, WAKE_COMMAND_TIMEOUT_MS);
 }
@@ -3583,42 +3598,34 @@ function initVoice(engineOverride){
     }
   };
   recognizer.onresult = async (event)=>{
-    if(!wakeWordMode && !voiceManualSession) return;
+    if(!wakeWordMode) return;
     if(voiceBusy || window.speechSynthesis?.speaking) return;
     voiceRetryDelay=500;
     const transcript = Array.from(event.results).slice(event.resultIndex || 0).filter(r=>r.isFinal).map(r=>r[0].transcript).join(' ').trim();
     if(!transcript) return;
-    voiceHeard.textContent='Heard: “'+transcript+'”';
     let command = transcript;
 
-    // Two-stage wake flow: standby hears only the wake phrase; after “Hey Sara”
-    // the next utterance is treated as the command for a short active window.
-    if(wakeWordMode && !voiceManualSession){
-      if(awaitingWakeCommand){
-        clearTimeout(wakeCommandTimer);
-        awaitingWakeCommand=false;
-        command=transcript.trim();
-        voiceBox.classList.add('show');
-        voiceHeard.textContent='Command: “' + command + '”';
-      } else {
-        const afterWake=stripWakeWord(transcript);
-        if(afterWake===null){voiceAnswer.textContent='Waiting for Hey Saara, Hi Sara, or Hey Sara.';return;} // Ignore ambient speech in standby.
-        command=afterWake;
-        if(!command){
-          armWakeCommandWindow();
-          return;
-        }
-        voiceBox.classList.add('show');
-        voiceHeard.textContent='“Hey Sara” — ' + command;
-      }
-    } else {
-      voiceBox.classList.add('show');
-      voiceHeard.textContent='"' + transcript + '"';
+    // Every spoken command must pass the wake gate, including manual sessions.
+    const gated = gateWakeTranscript(transcript);
+    if(gated.kind==='ignore'){
+      voiceHeard.textContent='Standby — listening for Hey Sara';
+      return;
     }
+    if(gated.kind==='wake'){
+      armWakeCommandWindow();
+      return;
+    }
+    command=gated.command;
+    // Consume the wake immediately: exactly one command per activation.
+    awaitingWakeCommand=false;
+    wakeCommandDeadline=0;
+    clearTimeout(wakeCommandTimer);
+    voiceBox.classList.add('show');
+    voiceHeard.textContent='Command: “'+command+'”';
 
     // Navigation commands stay local and instant. Hermes is reserved for reasoning/thinking.
     if(commandNavigate(command)){
-      voiceAnswer.textContent='Opening the requested section.';
+      voiceAnswer.textContent='Opening the requested section. Waiting for Hey Sara for your next command.';
       return;
     }
 
@@ -3629,11 +3636,16 @@ function initVoice(engineOverride){
       voiceAnswer.textContent = "Hermes is waking up — this can take up to a minute.";
     }, 6000);
     let answer;
-    try{ answer = await callHermes(command); }
-    catch(e){ answer = await answerQuery(command); }
-    clearTimeout(wakeTimer);
-    voiceBusy=false;
-    if(!wakeWordMode && !voiceManualSession) return;
+    try{
+      try{ answer = await callHermes(command); }
+      catch(e){ answer = await answerQuery(command); }
+    }catch(e){
+      answer='The command could not be completed. Please say Hey Sara to try again.';
+    }finally{
+      clearTimeout(wakeTimer);
+      voiceBusy=false;
+    }
+    if(!wakeWordMode) return;
     voiceAnswer.textContent = answer;
     setOrbState('speaking','AZZURRO RESPONDING');
     speak(answer);
