@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Ops Command Center</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -425,6 +425,71 @@ nav.tabs button.active{box-shadow:0 0 24px rgba(94,234,212,.11),inset 0 0 18px r
 @media(max-width:720px){.command-hub{display:flex;flex-direction:column}.command-core{order:-1;min-height:510px}.command-column,.command-column.right{display:grid;grid-template-columns:repeat(2,1fr)}.orb-wrap{width:210px;height:210px}.ai-orb{width:125px;height:125px}}
 @media(max-width:450px){.command-column,.command-column.right{grid-template-columns:1fr}.command-core{min-height:500px}.command-input{width:94%}.orb-prompt{padding:0 18px}}
 
+/* Responsive controls; no changes to authentication or operational data. */
+.mobile-module-nav,.mobile-voice-toggle,.mobile-panel-close{display:none}
+button,[role="button"],.mic-btn{touch-action:manipulation}
+:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+@media(max-width:1024px){
+  .app{perspective:none;transform-style:flat}
+  #tabContent{transform-style:flat}
+  .command-hub{min-height:0;gap:12px}
+  .command-core{min-width:0}
+  .command-input input,.chat-panel-input input{min-width:0}
+}
+@media(max-width:760px){
+  html{scroll-padding-top:76px}
+  .app{padding:12px max(12px,env(safe-area-inset-right)) calc(100px + env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
+  header{position:relative;top:auto;gap:10px;padding:12px;margin-bottom:12px}
+  .brand{min-width:0}.brand>div{min-width:0}.brand h1{font-size:15px;overflow-wrap:anywhere}.brand-mark{flex-shrink:0}
+  .header-actions{width:100%;gap:8px;justify-content:flex-start}
+  #userBadge{max-width:100%;flex-wrap:wrap;overflow-wrap:anywhere}
+  nav.tabs{display:none}
+  .mobile-module-nav{display:flex;position:sticky;top:0;z-index:40;align-items:center;gap:10px;background:#0b1424;padding:8px 10px;border:1px solid var(--panel-border);border-radius:12px;margin-bottom:14px}
+  .mobile-module-nav label{font-size:12px;color:var(--text-mid)}
+  .mobile-module-nav select{flex:1;min-width:0;width:100%}
+  button,.btn,.quick-chip,select{min-height:44px}
+  input:not([type="checkbox"]):not([type="radio"]),select,textarea{font-size:16px!important;max-width:100%;min-width:0}
+  input[type="checkbox"],input[type="radio"]{width:22px;height:22px;flex-shrink:0}
+  .field,.panel,.toolbar,.toolbar>div,.two-col>*,.grid-4>*{min-width:0;max-width:100%}
+  .toolbar{align-items:stretch}.toolbar>div{flex-wrap:wrap}.toolbar input,.toolbar select{width:100%!important;flex:1 1 100%}
+  .search-box{min-width:0;width:100%}
+  .two-col{grid-template-columns:minmax(0,1fr)}
+  .grid-4{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .command-hub{display:flex;flex-direction:column;transform-style:flat}
+  .command-core{order:-1;min-height:0;padding:18px 10px 22px;border-radius:18px}
+  .command-core::before{width:300px;height:300px}
+  .orb-wrap{width:180px;height:180px}.ai-orb{width:112px;height:112px}
+  .orb-title{font-size:18px}.orb-status{padding:0 10px;text-align:center;line-height:1.6}
+  .orb-prompt{margin-top:12px;padding:0 6px;font-size:12px}
+  .command-column,.command-column.right{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .command-widget{padding:12px;min-width:0}.command-widget .cw-value{font-size:25px}.cw-label,.cw-sub{overflow-wrap:anywhere}
+  .command-input{width:100%;padding:4px}.command-input input{padding:8px}.command-input .btn{padding:8px 10px}
+  .command-quick{gap:6px}.quick-chip{font-size:12px;padding:8px 10px}
+  .system-strip{grid-template-columns:1fr}.sys-mini{font-size:11px}.sys-mini b{font-size:12px}
+  .panel{padding:12px;overflow-wrap:anywhere}
+  .panel [style*="overflow-x:auto"],.modal [style*="overflow-x:auto"]{max-width:100%;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+  table{font-size:13px;min-width:560px}th,td{padding:10px 8px}td .btn{min-width:44px}
+  .modal-backdrop,.hermes-settings-modal{padding:12px;align-items:center}
+  .modal,.hermes-settings-panel{width:100%!important;max-width:100%!important;max-height:calc(100dvh - 24px);padding:16px;overscroll-behavior:contain;background:#0f172a}
+  .modal-actions{flex-wrap:wrap}.modal-actions .btn{flex:1;min-width:80px}
+  .voice-dock{right:max(12px,env(safe-area-inset-right));bottom:calc(12px + env(safe-area-inset-bottom) + var(--mobile-keyboard-gap,0px));gap:8px;align-items:flex-end}
+  .mic-btn{width:48px;height:48px;flex:0 0 48px}
+  .mobile-voice-toggle{display:block;min-height:48px;padding:8px 12px;background:#11233a;color:var(--cyan);border:1px solid var(--panel-border);border-radius:12px}
+  .mobile-panel-close{display:block;float:right;border:0;background:transparent;color:var(--text-hi);font-size:22px;min-width:44px;min-height:44px}
+  .voice-transcript,.chat-panel{position:fixed;left:max(10px,env(safe-area-inset-left));right:max(10px,env(safe-area-inset-right));bottom:calc(76px + env(safe-area-inset-bottom) + var(--mobile-keyboard-gap,0px));width:auto;max-width:none;max-height:calc(var(--mobile-visible-height,100dvh) - 100px);overflow-y:auto;overscroll-behavior:contain;background:#0b1424}
+  .voice-transcript[data-mobile-collapsed="true"]{display:none!important}
+  .chat-panel{height:min(480px,calc(var(--mobile-visible-height,100dvh) - 100px));z-index:2}
+  .chat-panel-head{flex-shrink:0}.chat-panel-head .icon-btn{min-width:44px;min-height:44px}
+  .chat-panel-body{min-height:0}.chat-msg{font-size:14px;overflow-wrap:anywhere;max-width:94%}
+  .chat-panel-input{flex-shrink:0;padding:8px}.chat-panel-input input{width:0;min-width:0}
+  .voice-transcript{font-size:14px}.voice-transcript .answer{max-height:160px;overflow:auto}
+  .model-option{min-width:0;flex-wrap:wrap}
+  .org-node .edit-badge,.org-node .remove-badge{opacity:1;min-width:32px;min-height:32px}
+  .reminder-toast{right:12px!important;left:12px;bottom:calc(78px + env(safe-area-inset-bottom))!important;max-width:none!important}
+}
+@media(max-width:380px){.command-column,.command-column.right,.grid-4{grid-template-columns:minmax(0,1fr)}.brand h1{font-size:13px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
 </style>
 </head>
 <body>
@@ -461,6 +526,7 @@ nav.tabs button.active{box-shadow:0 0 24px rgba(94,234,212,.11),inset 0 0 18px r
     </div>
   </header>
 
+  <div class="mobile-module-nav"><label for="mobileModuleSelect">Section</label><select id="mobileModuleSelect" aria-label="Open operational section"></select></div>
   <nav class="tabs" id="tabs"></nav>
   <div id="tabContent"></div>
 </div>
@@ -482,7 +548,9 @@ nav.tabs button.active{box-shadow:0 0 24px rgba(94,234,212,.11),inset 0 0 18px r
       <button class="btn btn-primary" id="chatSendBtn">Send</button>
     </div>
   </div>
-  <div class="voice-transcript" id="voiceBox">
+  <button class="mobile-voice-toggle" id="mobileVoiceToggle" type="button" aria-controls="voiceBox" aria-expanded="false">Voice details</button>
+  <div class="voice-transcript" id="voiceBox" data-mobile-collapsed="true">
+    <button class="mobile-panel-close" id="mobileVoiceClose" type="button" aria-label="Close voice details">×</button>
     <div id="voiceHeard"></div>
     <div style="margin-top:10px;border-top:1px solid #55718d;padding-top:8px">
       <strong>Live transcript</strong>
@@ -658,6 +726,10 @@ async function checkConnection(){
 function renderTabs(){
   const nav = document.getElementById('tabs');
   const tabs = visibleTabs();
+  const mobileNav=document.getElementById('mobileModuleSelect');
+  mobileNav.innerHTML=tabs.map(t=>`<option value="${t.id}">${esc(t.label)}</option>`).join('');
+  mobileNav.value=currentTab;
+  mobileNav.onchange=()=>switchModule(mobileNav.value);
   nav.innerHTML = tabs.map(t => `<button data-tab="${t.id}" class="${t.id===currentTab?'active':''}">${t.label}</button>`).join('');
   nav.querySelectorAll('button').forEach(b=>{
     b.onclick = ()=> switchModule(b.dataset.tab);
@@ -2488,6 +2560,7 @@ let todoLastDailyFireDate = localStorage.getItem('todo_last_daily_fire') || '';
 
 function showTodoToast(message){
   const toast = document.createElement('div');
+  toast.className='reminder-toast';
   toast.style.cssText = `position:fixed; bottom:100px; right:20px; z-index:300; max-width:340px;
     background:rgba(6,10,18,0.97); border:1px solid var(--panel-border-strong); border-radius:12px;
     padding:14px 16px; color:var(--text-hi); font-size:13px; line-height:1.5; box-shadow:0 12px 30px rgba(0,0,0,0.5);`;
@@ -3907,6 +3980,28 @@ document.getElementById('logoutBtn').onclick = async ()=>{
   renderContent();
 };
 
+for(const [id,label] of [['micBtn','Voice command standby or activate'],['chatToggleBtn','Open Hermes chat']]){
+  const control=document.getElementById(id);control.setAttribute('role','button');control.setAttribute('tabindex','0');control.setAttribute('aria-label',label);
+  control.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();control.click();}});
+}
+// Mobile panels remain dismissible without changing microphone state.
+const mobileVoiceToggle=document.getElementById('mobileVoiceToggle');
+function setMobileVoiceDetails(open){
+  voiceBox.dataset.mobileCollapsed=String(!open);
+  mobileVoiceToggle.setAttribute('aria-expanded',String(open));
+  if(open){voiceBox.classList.add('show');document.getElementById('chatPanel').classList.remove('show');}
+}
+mobileVoiceToggle.onclick=()=>setMobileVoiceDetails(voiceBox.dataset.mobileCollapsed==='true');
+document.getElementById('mobileVoiceClose').onclick=()=>setMobileVoiceDetails(false);
+if(window.visualViewport){
+  const syncMobileViewport=()=>{
+    const viewport=window.visualViewport;
+    if(viewport.scale!==1)return;
+    document.documentElement.style.setProperty('--mobile-visible-height',viewport.height+'px');
+    document.documentElement.style.setProperty('--mobile-keyboard-gap',Math.max(0,window.innerHeight-viewport.height-viewport.offsetTop)+'px');
+  };
+  window.visualViewport.addEventListener('resize',syncMobileViewport);syncMobileViewport();
+}
 // ---------- boot ----------
 if(createSupabaseClient()){
   sb.auth.onAuthStateChange((event)=>{
