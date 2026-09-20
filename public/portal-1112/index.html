@@ -674,7 +674,7 @@ function setOrbState(state, text){
 
 function commandNavigate(raw){
   let q=(raw||'').toLowerCase().trim();
-  q=q.replace(/^hey\s+xavy[\s,.:;-]*/i,'').trim();
+  q=q.replace(/^(?:hey\s+saara|hi\s+sara|hey\s+sara)\b[\s,.:;-]*/i,'').trim();
   const routes=[
     [/\b(org|org structure|organisation|organization|organization structure)\b/,'org'],
     [/\b(client follow[ -]?ups?|follow[ -]?ups?)\b/,'followups'],
@@ -762,12 +762,12 @@ async function enhanceCommandDashboard(el){
         <div class="command-widget"><div class="cw-label">Quick Access</div><div class="cw-sub" style="margin-top:9px;line-height:1.7">Use voice or the center command bar to open Sites, Staff, KPI, Invoices, Complaints, Visits and other modules.</div></div>
       </div>
       <div class="command-core">
-        <div class="orb-wrap" id="commandOrbWrap" role="button" tabindex="0" aria-label="Toggle Hey Xavy listening" title="Click to enable or disable Hey Xavy wake-word listening">
+        <div class="orb-wrap" id="commandOrbWrap" role="button" tabindex="0" aria-label="Toggle Hey Sara listening" title="Click to enable or disable Hey Sara wake-word listening">
           <div class="ai-orb"></div>
         </div>
         <div class="orb-title">AZZURRO</div>
         <div class="orb-status" id="commandOrbStatus">OPERATIONS AI ONLINE</div>
-        <div class="orb-prompt" id="commandOrbPrompt">Say “Hey Xavy” followed by a command, or ask a question. Navigation is handled instantly; reasoning and operational questions are sent to Hermes.</div>
+        <div class="orb-prompt" id="commandOrbPrompt">Say “Hey Saara”, “Hi Sara”, or “Hey Sara” followed by a command, or ask a question. Navigation is handled instantly; reasoning and operational questions are sent to Hermes.</div>
         <div class="command-input"><input id="commandInput" placeholder="Ask or speak a command…" autocomplete="off"><button class="btn btn-primary" id="commandSend">Execute</button></div>
         <div class="command-quick">
           <button class="quick-chip" data-cmd="Open complaints">Open Complaints</button><button class="quick-chip" data-cmd="Open KPI">Open KPI</button><button class="quick-chip" data-cmd="Open staff">Open Staff</button><button class="quick-chip" data-cmd="Open manager visits">Manager Visits</button>
@@ -3373,7 +3373,7 @@ let voiceManualSession = false;
 let voiceRestartTimer = null;
 let awaitingWakeCommand = false;
 let wakeCommandTimer = null;
-const WAKE_WORD = 'hey xavy';
+const WAKE_WORD = 'hey sara';
 const WAKE_COMMAND_TIMEOUT_MS = 8000;
 
 function normalizeWakeText(text){
@@ -3381,7 +3381,7 @@ function normalizeWakeText(text){
 }
 function stripWakeWord(text){
   const n=normalizeWakeText(text);
-  const match=/\bhey\s+(?:xavy|xavi|zavi|zavy)\b/.exec(n);
+  const match=/\b(?:hey\s+saara|hi\s+sara|hey\s+sara)\b/.exec(n);
   if(!match) return null;
   return n.slice(match.index+match[0].length).trim();
 }
@@ -3399,13 +3399,13 @@ function armWakeCommandWindow(){
   awaitingWakeCommand = true;
   clearTimeout(wakeCommandTimer);
   voiceBox.classList.add('show');
-  voiceHeard.textContent='Hey Xavy detected';
+  voiceHeard.textContent='Hey Sara detected';
   voiceAnswer.textContent='Yes?';
   setOrbState('listening','LISTENING FOR COMMAND');
   speak('Yes?');
   wakeCommandTimer=setTimeout(()=>{
     awaitingWakeCommand=false;
-    setOrbState('', wakeWordMode?'HEY XAVY READY':'OPERATIONS AI ONLINE');
+    setOrbState('', wakeWordMode?'HEY SARA READY':'OPERATIONS AI ONLINE');
   }, WAKE_COMMAND_TIMEOUT_MS);
 }
 
@@ -3427,7 +3427,7 @@ function initVoice(){
   recognizer.onstart = ()=>{
     voiceStarting=false; voiceRunning=true;
     micBtn.classList.add('listening');
-    setOrbState('listening', awaitingWakeCommand ? 'LISTENING FOR COMMAND' : (wakeWordMode && !voiceManualSession ? 'HEY XAVY READY' : 'LISTENING'));
+    setOrbState('listening', awaitingWakeCommand ? 'LISTENING FOR COMMAND' : (wakeWordMode && !voiceManualSession ? 'HEY SARA READY' : 'LISTENING'));
     if(voiceManualSession){ voiceBox.classList.add('show'); voiceHeard.textContent='Listening...'; voiceAnswer.textContent=''; }
   };
   recognizer.onend = ()=>{
@@ -3437,7 +3437,7 @@ function initVoice(){
     if(wakeWordMode){
       clearTimeout(voiceRestartTimer);
       voiceRestartTimer=setTimeout(()=>{if(wakeWordMode) startVoiceRecognition(false);},voiceRetryDelay);
-      setOrbState('', 'HEY XAVY READY');
+      setOrbState('', 'HEY SARA READY');
     } else setOrbState('', 'OPERATIONS AI ONLINE');
   };
   recognizer.onerror = (e)=>{
@@ -3461,7 +3461,7 @@ function initVoice(){
     if(!transcript) return;
     let command = transcript;
 
-    // Two-stage wake flow: standby hears only the wake phrase; after “Hey Xavy”
+    // Two-stage wake flow: standby hears only the wake phrase; after “Hey Sara”
     // the next utterance is treated as the command for a short active window.
     if(wakeWordMode && !voiceManualSession){
       if(awaitingWakeCommand){
@@ -3479,7 +3479,7 @@ function initVoice(){
           return;
         }
         voiceBox.classList.add('show');
-        voiceHeard.textContent='“Hey Xavy” — ' + command;
+        voiceHeard.textContent='“Hey Sara” — ' + command;
       }
     } else {
       voiceBox.classList.add('show');
@@ -3507,21 +3507,21 @@ function initVoice(){
     voiceAnswer.textContent = answer;
     setOrbState('speaking','AZZURRO RESPONDING');
     speak(answer);
-    setTimeout(()=>setOrbState('', wakeWordMode?'HEY XAVY READY':'OPERATIONS AI ONLINE'),1200);
+    setTimeout(()=>setOrbState('', wakeWordMode?'HEY SARA READY':'OPERATIONS AI ONLINE'),1200);
   };
 
   // First click grants microphone permission and enables hands-free wake-word mode.
   micBtn.onclick = ()=>{
     wakeWordMode = !wakeWordMode;
     if(wakeWordMode){
-      micBtn.title='Wake word active: say “Hey Xavy”';
+      micBtn.title='Wake word active: say “Hey Sara”';
       voiceBox.classList.add('show');
       voiceHeard.textContent='Wake word enabled';
-      voiceAnswer.textContent='Listening is being enabled. Allow microphone access for this site when prompted. Say “Hey Xavy”. After AZZURRO answers “Yes?”, speak your command. You can also say the wake word and command together.';
-      setOrbState('listening','ENABLING HEY XAVY');
+      voiceAnswer.textContent='Listening is being enabled. Allow microphone access for this site when prompted. Say “Hey Saara”, “Hi Sara”, or “Hey Sara”. After AZZURRO answers “Yes?”, speak your command. You can also say the wake word and command together.';
+      setOrbState('listening','ENABLING HEY SARA');
       startVoiceRecognition(false);
     }else{
-      micBtn.title='Enable “Hey Xavy” wake word';
+      micBtn.title='Enable “Hey Sara” wake word';
       clearTimeout(voiceRestartTimer);
       window.speechSynthesis?.cancel();
       awaitingWakeCommand=false; clearTimeout(wakeCommandTimer);
