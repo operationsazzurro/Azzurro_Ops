@@ -3753,15 +3753,20 @@ function voiceInputNeedsRecovery(){
   }
   return !voiceRunning && !voiceStarting;
 }
-function resumeVoiceFromIcon(){
+function resumeVoiceFromIcon(forceReconnect=false){
   if(!currentUser){lockVoiceUntilSignIn();return false;}
+  // A direct tap is the safest point to reclaim Safari's audio session.
+  ++responseSpeechSerial;
+  clearTimeout(responseStartTimer);
+  activeResponseUtterance=null;
+  window.speechSynthesis?.cancel();
   if(!recognizer)initVoice();
   wakeWordMode=true;
   commandSessionActive=false;
   commandSessionStarted=false;
   if(recognizer instanceof LocalWhisperRecognition){
     const tracks=recognizer.stream?.getAudioTracks?.() || [];
-    const mustReconnect=!recognizer.active || !tracks.length ||
+    const mustReconnect=forceReconnect || !recognizer.active || !tracks.length ||
       tracks.some(t=>t.muted || t.readyState==='ended');
     if(mustReconnect){
       try{recognizer.abort();}catch(e){}
@@ -3958,13 +3963,21 @@ function initVoice(engineOverride){
     if(!currentUser){lockVoiceUntilSignIn();micBtn.onclick();return;}
     voiceLastError='';
     voiceBox.classList.add('show');
-    if(voiceInputNeedsRecovery()){
-      resumeVoiceFromIcon();
-      return;
-    }
     if(wakeWordMode && commandSessionActive){
       window.speechSynthesis?.cancel();
       enterVoiceStandby();
+      // Keep standby capture alive; Safari may have silently suspended it.
+      if(recognizer instanceof LocalWhisperRecognition)resumeVoiceFromIcon(true);
+      return;
+    }
+    // Safari can report a healthy track while no audio frames arrive. A tap in
+    // standby therefore performs a hard local-capture restart unconditionally.
+    if(recognizer instanceof LocalWhisperRecognition){
+      resumeVoiceFromIcon(true);
+      return;
+    }
+    if(voiceInputNeedsRecovery()){
+      resumeVoiceFromIcon();
       return;
     }
     const wasEnabled=wakeWordMode;
