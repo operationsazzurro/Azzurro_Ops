@@ -484,6 +484,13 @@ nav.tabs button.active{box-shadow:0 0 24px rgba(94,234,212,.11),inset 0 0 18px r
   </div>
   <div class="voice-transcript" id="voiceBox">
     <div id="voiceHeard"></div>
+    <div style="margin-top:10px;border-top:1px solid #55718d;padding-top:8px">
+      <strong>Live transcript</strong>
+      <div id="voiceLiveText" aria-live="polite" style="margin-top:5px;white-space:pre-wrap;overflow-wrap:anywhere">Waiting for speech…</div>
+      <div id="voiceDecision" style="font-size:12px;color:#9bdad2;margin-top:5px">Only commands in the wake window reach the assistant.</div>
+      <div id="voiceRecent" style="max-height:110px;overflow:auto;font-size:11px;margin-top:6px"></div>
+      <div style="font-size:11px;margin-top:6px">Whisper displays text after a pause; browser speech can show words as you speak. These transcripts are not saved.</div>
+    </div>
     <div class="answer" id="voiceAnswer"></div>
     <label for="voiceEngine" style="display:block;margin-top:12px">Speech engine</label>
     <select id="voiceEngine" style="width:100%;padding:8px;background:#11233a;color:white;border:1px solid #55718d;border-radius:6px"><option value="local">On-device Whisper (no speech service)</option><option value="browser">Browser speech service</option></select>
@@ -3371,6 +3378,19 @@ async function answerQuery(q){
 }
 
 // Whisper runs in a dedicated worker. Audio is never sent to a transcription API.
+function showVoiceTranscript(text, decision, final=false){
+  if(!currentUser)return;
+  document.getElementById('voiceLiveText').textContent=text || 'Waiting for speech…';
+  document.getElementById('voiceDecision').textContent=decision;
+  voiceBox.classList.add('show');
+  if(final){
+    const history=document.getElementById('voiceRecent');
+    const row=document.createElement('div');
+    row.textContent=new Date().toLocaleTimeString()+' — '+text+' — '+decision;
+    row.style.marginTop='5px';history.prepend(row);
+    while(history.children.length>5)history.lastElementChild.remove();
+  }
+}
 function localVoiceStatus(text){
   const status=document.getElementById('voiceEngineStatus');
   if(status) status.textContent=text;
@@ -3603,6 +3623,9 @@ function lockVoiceUntilSignIn(){
   micBtn.classList.remove('listening');
   micBtn.title='Sign in to enable voice commands';
   micBtn.onclick=()=>{voiceBox.classList.add('show');voiceHeard.textContent='Voice commands locked';voiceAnswer.textContent='Please sign in to use the microphone and voice commands.';};
+  document.getElementById('voiceLiveText').textContent='Sign in to view voice recognition';
+  document.getElementById('voiceDecision').textContent='Voice commands locked';
+  document.getElementById('voiceRecent').replaceChildren();
   localVoiceStatus('Sign in to enable voice recognition');
   setOrbState('', 'SIGN IN FOR VOICE');
 }
@@ -3618,7 +3641,7 @@ function initVoice(engineOverride){
   }
   recognizer = new SR();
   recognizer.lang = 'en-US';
-  recognizer.interimResults = false;
+  recognizer.interimResults = true;
   recognizer.continuous = true; // Keep one session across wake words and commands.
   recognizer.maxAlternatives = 1;
 
@@ -3666,29 +3689,36 @@ function initVoice(engineOverride){
     const commandAuthEpoch=voiceAuthEpoch;
     if(window.speechSynthesis?.speaking) return;
     voiceRetryDelay=500;
-    const transcript = Array.from(event.results).slice(event.resultIndex || 0).filter(r=>r.isFinal).map(r=>r[0].transcript).join(' ').trim();
+    const changedResults=Array.from(event.results).slice(event.resultIndex || 0);
+    const interim=changedResults.filter(r=>!r.isFinal).map(r=>r[0].transcript).join(' ').trim();
+    if(interim)showVoiceTranscript(interim,'Recognizing… not sent to the assistant');
+    const transcript = changedResults.filter(r=>r.isFinal).map(r=>r[0].transcript).join(' ').trim();
     if(!transcript) return;
     if(isStopListeningCommand(transcript)){
+      showVoiceTranscript(transcript,'Standby requested — handled locally',true);
       window.speechSynthesis?.cancel();
       enterVoiceStandby();
       return;
     }
-    if(utteranceDuration>10000){utteranceDuration=0;enterVoiceStandby();return;}
+    if(utteranceDuration>10000){showVoiceTranscript(transcript,'Ignored — speech exceeded 10 seconds',true);utteranceDuration=0;enterVoiceStandby();return;}
     utteranceDuration=0;
-    if(voiceBusy) return;
+    if(voiceBusy){showVoiceTranscript(transcript,'Ignored — assistant is busy',true);return;}
     let command = transcript;
 
     // Every spoken command must pass the wake gate, including manual sessions.
     const gated = gateWakeTranscript(transcript);
     if(gated.kind==='ignore'){
+      showVoiceTranscript(transcript,'Ignored — no active wake window',true);
       voiceHeard.textContent='Standby — listening for Hey Sara';
       return;
     }
     if(gated.kind==='wake'){
+      showVoiceTranscript(transcript,'Wake phrase detected — 10-second window opened',true);
       armWakeCommandWindow();
       return;
     }
     command=gated.command;
+    showVoiceTranscript(transcript,'Accepted — inside the wake window',true);
     // The wake window is fixed: commands and replies never extend its deadline.
     awaitingWakeCommand=false;
     voiceBox.classList.add('show');
