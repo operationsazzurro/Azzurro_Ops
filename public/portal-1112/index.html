@@ -996,7 +996,7 @@ async function renderClients(el){
 
 function openProjectManagersPanel(){
   resetFormModalButtons();
-  document.getElementById('formTitle').textContent = 'Assign Project Managers';
+  document.getElementById('formTitle').textContent = 'Project Managers & Submission Requirements';
   const wrap = document.getElementById('formFields');
   wrap.innerHTML = `<p class="hint">Loading projects…</p>`;
   document.getElementById('formModal').classList.add('show');
@@ -1012,7 +1012,7 @@ function openProjectManagersPanel(){
   (async ()=>{
     const writeOk = canWrite();
     const [{ data: projects, error: pErr }, { data: people, error: oErr }] = await Promise.all([
-      sb.from('projects').select('id, project_name, project_code, project_manager_id, contracts(clients(client_name))').order('project_name'),
+      sb.from('projects').select('id, project_name, project_code, project_manager_id, requires_wcr, contracts(clients(client_name))').order('project_name'),
       sb.from('org_hierarchy').select('id, full_name, designation').order('full_name'),
     ]);
     if(pErr || oErr){
@@ -1024,19 +1024,28 @@ function openProjectManagersPanel(){
       return;
     }
     wrap.innerHTML = `
-      <p class="hint" style="margin-bottom:10px;">Pick a manager for each project — saves immediately when changed.</p>
-      <div style="display:flex; flex-direction:column; gap:10px; max-height:400px; overflow-y:auto;">
+      <p class="hint" style="margin-bottom:10px;">Both settings save immediately when changed. Submission requirement applies to every site under that project — invoices are generated per project, so this is set here rather than per site.</p>
+      <div style="display:flex; flex-direction:column; gap:10px; max-height:420px; overflow-y:auto;">
         ${projects.map(p=>`
           <div style="border:1px solid var(--panel-border); border-radius:8px; padding:10px 12px;">
             <div style="font-size:13px; color:var(--text-hi); font-weight:500;">${esc(p.project_name)}${p.project_code?` <span style="color:var(--text-dim); font-weight:400;">[${esc(p.project_code)}]</span>`:''}</div>
             <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:6px;">${esc(p.contracts?.clients?.client_name||'No client linked')}</div>
             ${writeOk ? `
-              <select data-project-id="${p.id}">
-                <option value="">— No manager assigned —</option>
-                ${people.map(person=>`<option value="${person.id}" ${person.id===p.project_manager_id?'selected':''}>${esc(person.full_name)}${person.designation?' — '+esc(person.designation):''}</option>`).join('')}
-              </select>
-              <span class="pm-save-status" data-status-for="${p.id}" style="font-size:11px; color:var(--cyan-bright); margin-left:8px;"></span>
-            ` : `<div style="font-size:12.5px; color:var(--text-mid);">${p.project_manager_id ? esc((people.find(pe=>pe.id===p.project_manager_id)||{}).full_name || '—') : 'No manager assigned'}</div>`}
+              <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                <select data-project-id="${p.id}" data-field="manager">
+                  <option value="">— No manager assigned —</option>
+                  ${people.map(person=>`<option value="${person.id}" ${person.id===p.project_manager_id?'selected':''}>${esc(person.full_name)}${person.designation?' — '+esc(person.designation):''}</option>`).join('')}
+                </select>
+                <select data-project-id="${p.id}" data-field="requires_wcr">
+                  <option value="false" ${!p.requires_wcr?'selected':''}>Timesheet only</option>
+                  <option value="true" ${p.requires_wcr?'selected':''}>Timesheet & WCR</option>
+                </select>
+                <span class="pm-save-status" data-status-for="${p.id}" style="font-size:11px; color:var(--cyan-bright);"></span>
+              </div>
+            ` : `<div style="font-size:12.5px; color:var(--text-mid);">
+                ${p.project_manager_id ? esc((people.find(pe=>pe.id===p.project_manager_id)||{}).full_name || '—') : 'No manager assigned'}
+                &nbsp;·&nbsp; ${p.requires_wcr ? 'Timesheet & WCR' : 'Timesheet only'}
+              </div>`}
           </div>
         `).join('')}
       </div>
@@ -1045,10 +1054,12 @@ function openProjectManagersPanel(){
       wrap.querySelectorAll('[data-project-id]').forEach(sel=>{
         sel.onchange = async (e)=>{
           const projectId = e.target.dataset.projectId;
-          const managerId = e.target.value || null;
+          const field = e.target.dataset.field;
+          const value = field === 'requires_wcr' ? (e.target.value === 'true') : (e.target.value || null);
+          const column = field === 'requires_wcr' ? 'requires_wcr' : 'project_manager_id';
           const statusEl = wrap.querySelector(`[data-status-for="${projectId}"]`);
           statusEl.textContent = 'Saving…';
-          const { error } = await sb.from('projects').update({ project_manager_id: managerId }).eq('id', projectId);
+          const { error } = await sb.from('projects').update({ [column]: value }).eq('id', projectId);
           statusEl.textContent = error ? 'Could not save' : 'Saved ✓';
           statusEl.style.color = error ? 'var(--red)' : 'var(--cyan-bright)';
           if(!error) setTimeout(()=>{ statusEl.textContent = ''; }, 2000);
@@ -1066,7 +1077,7 @@ async function renderContracts(el){
   el.innerHTML = `<div class="panel"><div class="toolbar">
     <div class="panel-title" style="margin:0;">Projects & Contracts (${rows.length})</div>
     <div style="display:flex; gap:8px;">
-      <button class="btn" id="manageManagersBtn">👤 Assign Project Managers</button>
+      <button class="btn" id="manageManagersBtn">👤 Managers & Submission Requirements</button>
       ${writeOk ? `<button class="btn" id="importBtn">⬆ Import CSV</button>
       <button class="btn btn-primary" id="addBtn">+ Add Contract</button>` : ''}
     </div></div>
@@ -1146,7 +1157,14 @@ function openContractForm(clients, editingRow){
     ${!editingRow ? `
     <div class="field"><label>Project name (optional — creates a linked project so you can add its sites next)</label><input id="cf_project" type="text" placeholder="e.g. Al Ain Mall FM Contract"></div>
     <div class="field"><label>Project code (optional)</label><input id="cf_projectcode" type="text" placeholder="e.g. PRJ-AUH-014"></div>
-    ` : `<p class="hint">To add or rename projects under this contract, use the Sites tab's project picker, or ask me to add a project management view.</p>`}
+    <div class="field"><label>Submission requirement</label>
+      <select id="cf_requiresWcr">
+        <option value="false" selected>Timesheet only</option>
+        <option value="true">Timesheet & WCR</option>
+      </select>
+      <p class="hint" style="margin-top:4px;">Applies to every site created under this project — invoices are generated per project, so this is set here rather than per site. Can be changed later from Contracts → Managers & Submission Requirements.</p>
+    </div>
+    ` : `<p class="hint">To add or rename projects under this contract, use the Sites tab's project picker, or the Managers & Submission Requirements panel above.</p>`}
   `;
   document.getElementById('cf_client').onchange = (e)=>{
     document.getElementById('cf_newClientFields').style.display = e.target.value==='__new__' ? 'block' : 'none';
@@ -1192,7 +1210,8 @@ function openContractForm(clients, editingRow){
         const { error: projErr } = await sb.from('projects').insert({
           contract_id: contractData.id,
           project_name: projectName,
-          project_code: projectCode || null
+          project_code: projectCode || null,
+          requires_wcr: document.getElementById('cf_requiresWcr').value === 'true'
         });
         if(projErr) alert('Contract saved, but the project could not be created: '+projErr.message);
       }
@@ -1274,12 +1293,6 @@ function openSiteForm(projects, editingRow){
     <div class="field"><label>Site Manager</label><select id="sf_incharge"><option value="">— Not assigned —</option></select>
       <p class="hint" style="margin-top:4px;">Defaults to the project's assigned manager — change the Project above to refresh it, or pick someone else manually. Receives daily reminder emails if this site's Timesheet/WCR submission is still pending for the month.</p>
     </div>
-    <div class="field"><label>Submission requirement</label>
-      <select id="sf_requiresWcr">
-        <option value="false" ${!(editingRow&&editingRow.requires_wcr)?'selected':''}>Timesheet only</option>
-        <option value="true" ${editingRow&&editingRow.requires_wcr?'selected':''}>Timesheet & WCR</option>
-      </select>
-    </div>
   `;
   document.getElementById('formModal').classList.add('show');
 
@@ -1313,7 +1326,6 @@ function openSiteForm(projects, editingRow){
       site_type: document.getElementById('sf_type').value || null,
       manpower_required: document.getElementById('sf_manpower').value ? Number(document.getElementById('sf_manpower').value) : 0,
       site_incharge_id: document.getElementById('sf_incharge').value || null,
-      requires_wcr: document.getElementById('sf_requiresWcr').value === 'true',
     };
     let result;
     if(editingRow) result = await sb.from('sites').update(site).eq('id', editingRow.id);
@@ -1364,7 +1376,7 @@ async function renderStaff(el){
 }
 
 async function renderInvoices(el){
-  const { data, error } = await sb.from('invoice_wcr_submissions').select('*, sites(site_name, requires_wcr, site_incharge_id, projects(project_name, project_manager_id, org_hierarchy(full_name)))').order('billing_month',{ascending:false});
+  const { data, error } = await sb.from('invoice_wcr_submissions').select('*, sites(site_name, site_incharge_id, projects(project_name, project_manager_id, requires_wcr, org_hierarchy(full_name)))').order('billing_month',{ascending:false});
   if(error) throw error;
   const rows = data||[];
   const writeOk = canWrite();
@@ -1377,7 +1389,7 @@ async function renderInvoices(el){
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Manager</th><th>Billing Month</th><th>Timesheet Status</th><th>WCR Status</th><th>Invoice Status</th><th>Invoice Date</th><th>Amount</th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>{
       const mgr = r.sites?.projects?.org_hierarchy?.full_name || 'Unassigned';
-      const requiresWcr = !!r.sites?.requires_wcr;
+      const requiresWcr = !!r.sites?.projects?.requires_wcr;
       const fmtUpdated = (ts)=> ts ? new Date(ts).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '';
       const tsUpdated = fmtUpdated(r.timesheet_status_updated_at);
       const wcrUpdated = fmtUpdated(r.wcr_status_updated_at);
@@ -1468,7 +1480,7 @@ async function exportInvoiceReport(){
     const { data, error } = await sb.from('invoice_wcr_submissions').select(`
       billing_month, invoice_amount, invoice_status, invoice_submitted, invoice_submission_date, invoice_status_updated_at,
       wcr_status, wcr_submitted, wcr_status_updated_at, timesheet_status, timesheet_status_updated_at, remarks,
-      sites(site_name, requires_wcr, projects(project_name, project_manager_id, org_hierarchy(full_name)))
+      sites(site_name, projects(project_name, project_manager_id, requires_wcr, org_hierarchy(full_name)))
     `).order('billing_month', { ascending: false });
     if(error) throw error;
 
@@ -1479,9 +1491,9 @@ async function exportInvoiceReport(){
       'Billing Month': r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '',
       'Timesheet Status': r.timesheet_status || 'Not Submitted',
       'Timesheet Status Updated': r.timesheet_status_updated_at ? new Date(r.timesheet_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
-      'WCR Required': r.sites?.requires_wcr ? 'Yes' : 'No',
-      'WCR Status': r.sites?.requires_wcr ? (r.wcr_status || (r.wcr_submitted ? 'Submitted to Coordinator' : 'Not Submitted')) : 'N/A',
-      'WCR Status Updated': r.sites?.requires_wcr ? (r.wcr_status_updated_at ? new Date(r.wcr_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : '',
+      'WCR Required': r.sites?.projects?.requires_wcr ? 'Yes' : 'No',
+      'WCR Status': r.sites?.projects?.requires_wcr ? (r.wcr_status || (r.wcr_submitted ? 'Submitted to Coordinator' : 'Not Submitted')) : 'N/A',
+      'WCR Status Updated': r.sites?.projects?.requires_wcr ? (r.wcr_status_updated_at ? new Date(r.wcr_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : '',
       'Invoice Status': r.invoice_status || (r.invoice_submitted ? 'Invoice received' : ''),
       'Invoice Status Updated': r.invoice_status_updated_at ? new Date(r.invoice_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
       'Invoice Date': r.invoice_submission_date ? fmtDate(r.invoice_submission_date) : '',
