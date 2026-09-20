@@ -770,7 +770,7 @@ async function enhanceCommandDashboard(el){
         </div>
         <div class="orb-title">AZZURRO</div>
         <div class="orb-status" id="commandOrbStatus">OPERATIONS AI ONLINE</div>
-        <div class="orb-prompt" id="commandOrbPrompt">Say “Hey Saara”, “Hi Sara”, or “Hey Sara” once to start continuous command listening. Click the microphone or ORB to stop; click again to resume. Navigation is handled instantly; reasoning and operational questions are sent to Hermes.</div>
+        <div class="orb-prompt" id="commandOrbPrompt">Say “Hey Saara”, “Hi Sara”, or “Hey Sara” to activate commands. After 10 seconds of inactivity, or “stop listening”, wake-word standby resumes. The mic or ORB turns the microphone off or on. Navigation is handled instantly; reasoning and operational questions are sent to Hermes.</div>
         <div class="command-input"><input id="commandInput" placeholder="Ask or speak a command…" autocomplete="off"><button class="btn btn-primary" id="commandSend">Execute</button></div>
         <div class="command-quick">
           <button class="quick-chip" data-cmd="Open complaints">Open Complaints</button><button class="quick-chip" data-cmd="Open KPI">Open KPI</button><button class="quick-chip" data-cmd="Open staff">Open Staff</button><button class="quick-chip" data-cmd="Open manager visits">Manager Visits</button>
@@ -2490,7 +2490,7 @@ function showTodoToast(message){
   </div>`;
   toast.querySelector('button').onclick = ()=> toast.remove();
   document.body.appendChild(toast);
-  setTimeout(()=> toast.remove(), 15000);
+  setTimeout(()=> toast.remove(), 5000);
 }
 
 function speakTaskAlert(message){
@@ -3443,6 +3443,7 @@ class LocalWhisperRecognition {
     if(!this.active || this.processing || voiceBusy || window.speechSynthesis?.speaking){this.resetFrames();return;}
     const frame=new Float32Array(input);let energy=0;for(const v of frame)energy+=v*v;
     const speech=Math.sqrt(energy/frame.length)>0.012;
+    if(speech && commandSessionActive)refreshCommandTimeout();
     if(!this.frames.length){
       this.pre.push(frame);if(this.pre.length>3)this.pre.shift();
       if(!speech)return;
@@ -3499,7 +3500,7 @@ let awaitingWakeCommand = false;
 let wakeCommandDeadline = 0;
 let wakeCommandTimer = null;
 const WAKE_WORD = 'hey sara';
-const WAKE_COMMAND_TIMEOUT_MS = 20000;
+const WAKE_COMMAND_TIMEOUT_MS = 10000;
 
 function normalizeWakeText(text){
   return (text||'').toLowerCase().replace(/[,.!?;:]/g,' ').replace(/\s+/g,' ').trim();
@@ -3510,15 +3511,46 @@ function stripWakeWord(text){
   if(!match) return null;
   return n.slice(match.index+match[0].length).trim();
 }
+function isStopListeningCommand(transcript){
+  const command=stripWakeWord(transcript) ?? normalizeWakeText(transcript);
+  return /^(?:please )?stop listening(?: please)?$/.test(command);
+}
+function enterVoiceStandby(){
+  clearTimeout(wakeCommandTimer);
+  commandSessionActive=false;
+  commandSessionStarted=false;
+  awaitingWakeCommand=false;
+  wakeCommandDeadline=0;
+  voiceHeard.textContent='Standby — say Hey Sara to activate';
+  voiceAnswer.textContent='Commands paused. Waiting for the wake phrase.';
+  setOrbState('',wakeWordMode?'HEY SARA STANDBY':'MICROPHONE OFF');
+}
+function refreshCommandTimeout(){
+  clearTimeout(wakeCommandTimer);
+  if(!wakeWordMode || !commandSessionActive)return;
+  wakeCommandDeadline=Date.now()+WAKE_COMMAND_TIMEOUT_MS;
+  const check=()=>{
+    if(!wakeWordMode || !commandSessionActive)return;
+    if(voiceBusy || window.speechSynthesis?.speaking || recognizer?.processing){
+      wakeCommandDeadline=Date.now()+WAKE_COMMAND_TIMEOUT_MS;
+      wakeCommandTimer=setTimeout(check,500);return;
+    }
+    const remaining=wakeCommandDeadline-Date.now();
+    if(remaining>0){wakeCommandTimer=setTimeout(check,remaining);return;}
+    enterVoiceStandby();
+  };
+  wakeCommandTimer=setTimeout(check,WAKE_COMMAND_TIMEOUT_MS);
+}
 function gateWakeTranscript(transcript){
   if(!wakeWordMode)return {kind:'ignore'};
   const afterWake=stripWakeWord(transcript);
   if(afterWake!==null){
     commandSessionActive=true;
     commandSessionStarted=true;
+    refreshCommandTimeout();
     return afterWake ? {kind:'command',command:afterWake} : {kind:'wake'};
   }
-  if(commandSessionActive && transcript.trim())return {kind:'command',command:transcript.trim()};
+  if(commandSessionActive && transcript.trim()){refreshCommandTimeout();return {kind:'command',command:transcript.trim()};}
   return {kind:'ignore'};
 }
 function startVoiceRecognition(manual=false){
@@ -3538,9 +3570,10 @@ function armWakeCommandWindow(){
   clearTimeout(wakeCommandTimer);
   voiceBox.classList.add('show');
   voiceHeard.textContent='Hey Sara detected — command listening active';
-  voiceAnswer.textContent='Yes? I will keep listening. Click the microphone or ORB to stop.';
+  voiceAnswer.textContent='Yes? Speak your command. After 10 seconds without another command, I return to standby.';
   setOrbState('listening','COMMAND LISTENING ACTIVE');
   speak('Yes?');
+  refreshCommandTimeout();
 }
 
 function initVoice(engineOverride){
@@ -3595,10 +3628,16 @@ function initVoice(engineOverride){
   };
   recognizer.onresult = async (event)=>{
     if(!wakeWordMode) return;
-    if(voiceBusy || window.speechSynthesis?.speaking) return;
+    if(window.speechSynthesis?.speaking) return;
     voiceRetryDelay=500;
     const transcript = Array.from(event.results).slice(event.resultIndex || 0).filter(r=>r.isFinal).map(r=>r[0].transcript).join(' ').trim();
     if(!transcript) return;
+    if(isStopListeningCommand(transcript)){
+      window.speechSynthesis?.cancel();
+      enterVoiceStandby();
+      return;
+    }
+    if(voiceBusy) return;
     let command = transcript;
 
     // Every spoken command must pass the wake gate, including manual sessions.
@@ -3612,7 +3651,7 @@ function initVoice(engineOverride){
       return;
     }
     command=gated.command;
-    // Keep the command session active until the microphone or ORB is toggled off.
+    // Pause the inactivity timer during command processing; rearm after dispatch.
     awaitingWakeCommand=false;
     wakeCommandDeadline=0;
     clearTimeout(wakeCommandTimer);
@@ -3621,7 +3660,8 @@ function initVoice(engineOverride){
 
     // Navigation commands stay local and instant. Hermes is reserved for reasoning/thinking.
     if(commandNavigate(command)){
-      voiceAnswer.textContent='Opening the requested section. Listening for your next command — click the microphone or ORB to stop.';
+      voiceAnswer.textContent='Opening the requested section. Waiting up to 10 seconds for your next command.';
+      refreshCommandTimeout();
       return;
     }
 
@@ -3641,10 +3681,11 @@ function initVoice(engineOverride){
       clearTimeout(wakeTimer);
       voiceBusy=false;
     }
-    if(!wakeWordMode) return;
+    if(!wakeWordMode || !commandSessionActive) return;
     voiceAnswer.textContent = answer;
     setOrbState('speaking','AZZURRO RESPONDING');
     speak(answer);
+    refreshCommandTimeout();
     setTimeout(()=>setOrbState('', wakeWordMode?(commandSessionActive?'COMMAND LISTENING ACTIVE':'HEY SARA READY'):'OPERATIONS AI ONLINE'),1200);
   };
 
@@ -3658,9 +3699,10 @@ function initVoice(engineOverride){
       micBtn.title='Click to stop listening';
       voiceBox.classList.add('show');
       voiceHeard.textContent=commandSessionActive?'Command listening enabled':'Wake-word standby enabled';
-      voiceAnswer.textContent=commandSessionActive?'Speak your commands. Listening remains active until you click the microphone or ORB.':'Say Hey Saara, Hi Sara, or Hey Sara once to begin continuous command listening. Click the microphone or ORB to stop.';
+      voiceAnswer.textContent=commandSessionActive?'Speak your command. After 10 seconds of inactivity, standby resumes. Say stop listening to return to standby now.':'Say Hey Saara, Hi Sara, or Hey Sara to activate commands. Say stop listening to return to wake-word standby.';
       setOrbState('listening','ENABLING HEY SARA');
       startVoiceRecognition(false);
+      refreshCommandTimeout();
     }else{
       commandSessionActive=false;
       micBtn.title='Resume command listening';
