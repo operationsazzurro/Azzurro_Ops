@@ -674,7 +674,7 @@ function setOrbState(state, text){
 
 function commandNavigate(raw){
   let q=(raw||'').toLowerCase().trim();
-  q=q.replace(/^(?:hey\s+saara|hi\s+sara|hey\s+sara)\b[\s,.:;-]*/i,'').trim();
+  q=q.replace(/^(?:hey|hi)\s+(?:saara|sara|sarah)\b[\s,.:;-]*/i,'').trim();
   const routes=[
     [/\b(org|org structure|organisation|organization|organization structure)\b/,'org'],
     [/\b(client follow[ -]?ups?|follow[ -]?ups?)\b/,'followups'],
@@ -3364,6 +3364,7 @@ async function answerQuery(q){
   }
 }
 
+let voiceLastError = '';
 let voiceStarting = false;
 let voiceRunning = false;
 let voiceBusy = false;
@@ -3381,7 +3382,7 @@ function normalizeWakeText(text){
 }
 function stripWakeWord(text){
   const n=normalizeWakeText(text);
-  const match=/\b(?:hey\s+saara|hi\s+sara|hey\s+sara)\b/.exec(n);
+  const match=/\b(?:hey|hi)\s+(?:saara|sara|sarah)\b/.exec(n);
   if(!match) return null;
   return n.slice(match.index+match[0].length).trim();
 }
@@ -3416,6 +3417,7 @@ function initVoice(){
   if(!SR){
     micBtn.title = "Voice recognition isn't supported in this browser — try Chrome or Edge desktop.";
     micBtn.style.opacity = 0.4;
+    micBtn.onclick=()=>{voiceBox.classList.add('show');voiceHeard.textContent='Speech recognition unavailable';voiceAnswer.textContent='Open this page directly in Chrome or Edge. This browser or embedded preview does not provide speech recognition.';};
     return;
   }
   recognizer = new SR();
@@ -3425,7 +3427,8 @@ function initVoice(){
   recognizer.maxAlternatives = 1;
 
   recognizer.onstart = ()=>{
-    voiceStarting=false; voiceRunning=true;
+    voiceStarting=false; voiceRunning=true; voiceLastError='';
+    voiceHeard.textContent='Microphone listening — say Hey Sara';
     micBtn.classList.add('listening');
     setOrbState('listening', awaitingWakeCommand ? 'LISTENING FOR COMMAND' : (wakeWordMode && !voiceManualSession ? 'HEY SARA READY' : 'LISTENING'));
     if(voiceManualSession){ voiceBox.classList.add('show'); voiceHeard.textContent='Listening...'; voiceAnswer.textContent=''; }
@@ -3437,10 +3440,14 @@ function initVoice(){
     if(wakeWordMode){
       clearTimeout(voiceRestartTimer);
       voiceRestartTimer=setTimeout(()=>{if(wakeWordMode) startVoiceRecognition(false);},voiceRetryDelay);
-      setOrbState('', 'HEY SARA READY');
-    } else setOrbState('', 'OPERATIONS AI ONLINE');
+      setOrbState('', voiceLastError ? 'VOICE RETRY: '+voiceLastError : 'RECONNECTING MICROPHONE');
+    } else setOrbState('', voiceLastError ? 'VOICE STOPPED: '+voiceLastError : 'OPERATIONS AI ONLINE');
   };
   recognizer.onerror = (e)=>{
+    voiceLastError=e?.error || 'unknown';
+    voiceBox.classList.add('show');
+    voiceHeard.textContent='Voice error: '+voiceLastError;
+    if(e?.error==='network') voiceAnswer.textContent='The browser speech service could not be reached. Check your connection. Listening will retry automatically.';
     micBtn.classList.remove('listening');
     if(voiceManualSession){ voiceHeard.textContent='Could not hear that — try again.'; }
     if(e?.error==='network') voiceRetryDelay=Math.min(voiceRetryDelay*2,15000);
@@ -3459,6 +3466,7 @@ function initVoice(){
     voiceRetryDelay=500;
     const transcript = Array.from(event.results).slice(event.resultIndex || 0).filter(r=>r.isFinal).map(r=>r[0].transcript).join(' ').trim();
     if(!transcript) return;
+    voiceHeard.textContent='Heard: “'+transcript+'”';
     let command = transcript;
 
     // Two-stage wake flow: standby hears only the wake phrase; after “Hey Sara”
@@ -3472,7 +3480,7 @@ function initVoice(){
         voiceHeard.textContent='Command: “' + command + '”';
       } else {
         const afterWake=stripWakeWord(transcript);
-        if(afterWake===null) return; // ignore ambient speech in standby
+        if(afterWake===null){voiceAnswer.textContent='Waiting for Hey Saara, Hi Sara, or Hey Sara.';return;} // Ignore ambient speech in standby.
         command=afterWake;
         if(!command){
           armWakeCommandWindow();
@@ -3512,6 +3520,7 @@ function initVoice(){
 
   // First click grants microphone permission and enables hands-free wake-word mode.
   micBtn.onclick = ()=>{
+    voiceLastError='';
     wakeWordMode = !wakeWordMode;
     if(wakeWordMode){
       micBtn.title='Wake word active: say “Hey Sara”';
