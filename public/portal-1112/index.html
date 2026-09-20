@@ -562,6 +562,7 @@ button,[role="button"],.mic-btn{touch-action:manipulation}
     <div class="answer" id="voiceAnswer"></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
       <button class="btn" id="enableResponseAudio" type="button">Enable / test audio</button>
+      <button class="btn" id="resumeVoiceInput" type="button">Resume microphone</button>
       <button class="btn" id="replayResponseAudio" type="button">Play last response</button>
     </div>
     <div id="responseAudioStatus" role="status" style="font-size:12px;margin-top:6px">On iPhone, tap Enable / test audio once after signing in.</div>
@@ -3438,11 +3439,13 @@ function speak(text,remember=true){
       if(serial!==responseSpeechSerial)return;
       clearTimeout(responseStartTimer);activeResponseUtterance=null;
       responseAudioStatus('Playback finished. Tap Play last response to hear it again.');
+      setTimeout(recoverVoiceInput,300);
       setOrbState(wakeWordMode?'listening':'',wakeWordMode?(commandSessionActive?'COMMAND LISTENING ACTIVE':'HEY SARA STANDBY'):'OPERATIONS AI ONLINE');
     };
     u.onerror=e=>{
       if(serial!==responseSpeechSerial)return;
       clearTimeout(responseStartTimer);activeResponseUtterance=null;
+      setTimeout(recoverVoiceInput,300);
       responseAudioStatus('Audio could not play ('+(e.error||'unknown error')+'). Tap Play last response to retry directly.');
     };
     responseAudioStatus('Starting audio…');
@@ -3589,7 +3592,14 @@ class LocalWhisperRecognition {
     this.gain=this.context.createGain();this.gain.gain.value=0;
     this.node.onaudioprocess=e=>this.capture(e.inputBuffer.getChannelData(0));
     this.source.connect(this.node);this.node.connect(this.gain);this.gain.connect(this.context.destination);
-    stream.getAudioTracks().forEach(t=>t.onended=()=>{if(this.active)this.fail('audio-capture','Microphone disconnected. Reconnect it and click the microphone.');});
+    stream.getAudioTracks().forEach(t=>{
+      t.onmute=()=>{if(this.active){localVoiceStatus('Microphone temporarily interrupted — waiting for audio to resume');setTimeout(recoverVoiceInput,800);}};
+      t.onunmute=()=>{if(this.active){localVoiceStatus('Microphone restored — listening on this device');recoverVoiceInput();}};
+      t.onended=()=>{if(this.active)this.fail('audio-capture','Microphone disconnected. Tap Resume microphone to reconnect.');};
+    });
+    this.context.onstatechange=()=>{
+      if(this.active && this.context?.state!=='running')localVoiceStatus('Audio input paused — tap Resume microphone if it does not resume after playback.');
+    };
     localVoiceStatus('Local model ready • Listening on this device');this.onstart?.();
   }
   capture(input){
@@ -3627,7 +3637,8 @@ class LocalWhisperRecognition {
     this.active=false;++this.generation;
     if(this.node)this.node.onaudioprocess=null;
     this.source?.disconnect();this.node?.disconnect();this.gain?.disconnect();
-    this.stream?.getTracks().forEach(t=>{t.onended=null;t.stop();});
+    this.stream?.getTracks().forEach(t=>{t.onended=t.onmute=t.onunmute=null;t.stop();});
+    if(this.context)this.context.onstatechange=null;
     this.context?.close().catch(()=>{});
     this.source=this.node=this.gain=this.stream=this.context=null;
     this.resetFrames();this.discardLongUtterance=false;this.longSilence=0;localVoiceStatus('Local listening stopped');this.onend?.();
@@ -3715,6 +3726,25 @@ function gateWakeTranscript(transcript){
   }
   return {kind:'ignore'};
 }
+function recoverVoiceInput(){
+  if(!currentUser || !wakeWordMode || !recognizer || document.visibilityState==='hidden')return;
+  if(window.speechSynthesis?.speaking)return;
+  if(recognizer instanceof LocalWhisperRecognition){
+    const owner=recognizer;
+    if(!owner.active)return;
+    const context=owner.context;
+    if(context && context.state!=='running' && context.state!=='closed'){
+      localVoiceStatus('Resuming microphone audio…');
+      context.resume().then(()=>{
+        if(recognizer!==owner || !currentUser || !wakeWordMode)return;
+        localVoiceStatus(context.state==='running'?'Microphone restored — wake-word detection active':'Audio is paused by the browser. Tap Resume microphone.');
+      }).catch(()=>localVoiceStatus('Audio is paused by the browser. Tap Resume microphone.'));
+    }
+    if(owner.stream?.getAudioTracks().some(t=>t.muted))localVoiceStatus('Microphone interrupted by the browser. Tap Resume microphone if it does not return.');
+  }else if(!voiceRunning && !voiceStarting){
+    startVoiceRecognition(false);
+  }
+}
 function startVoiceRecognition(manual=false){
   if(!currentUser || !recognizer || voiceStarting || voiceRunning || (!wakeWordMode && !manual)) return;
   clearTimeout(voiceRestartTimer);
@@ -3792,7 +3822,12 @@ function initVoice(engineOverride){
     voiceManualSession=false;
     if(wakeWordMode){
       clearTimeout(voiceRestartTimer);
-      voiceRestartTimer=setTimeout(()=>{if(wakeWordMode) startVoiceRecognition(false);},voiceRetryDelay);
+      const restartAfterAudio=()=>{
+        if(!currentUser || !wakeWordMode)return;
+        if(window.speechSynthesis?.speaking){voiceRestartTimer=setTimeout(restartAfterAudio,500);return;}
+        recoverVoiceInput();
+      };
+      voiceRestartTimer=setTimeout(restartAfterAudio,voiceRetryDelay);
       setOrbState('', voiceLastError ? 'VOICE RETRY: '+voiceLastError : 'RECONNECTING MICROPHONE');
     } else setOrbState('', voiceLastError ? 'VOICE STOPPED: '+voiceLastError : 'OPERATIONS AI ONLINE');
   };
@@ -4044,6 +4079,16 @@ for(const [id,label] of [['micBtn','Voice command standby or activate'],['chatTo
   const control=document.getElementById(id);control.setAttribute('role','button');control.setAttribute('tabindex','0');control.setAttribute('aria-label',label);
   control.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();control.click();}});
 }
+document.getElementById('resumeVoiceInput').onclick=()=>{
+  if(!currentUser){localVoiceStatus('Sign in to resume the microphone.');return;}
+  if(!recognizer)initVoice();
+  if(!wakeWordMode){micBtn.onclick();return;}
+  if(recognizer instanceof LocalWhisperRecognition && recognizer.stream?.getAudioTracks().some(t=>t.muted || t.readyState==='ended')){
+    recognizer.abort();voiceStarting=false;voiceRunning=false;startVoiceRecognition(false);
+  }else recoverVoiceInput();
+};
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')recoverVoiceInput();});
+window.addEventListener('pageshow',recoverVoiceInput);
 // Mobile panels remain dismissible without changing microphone state.
 const mobileVoiceToggle=document.getElementById('mobileVoiceToggle');
 function setMobileVoiceDetails(open){
