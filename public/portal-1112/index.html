@@ -485,6 +485,9 @@ nav.tabs button.active{box-shadow:0 0 24px rgba(94,234,212,.11),inset 0 0 18px r
   <div class="voice-transcript" id="voiceBox">
     <div id="voiceHeard"></div>
     <div class="answer" id="voiceAnswer"></div>
+    <label for="voiceEngine" style="display:block;margin-top:12px">Speech engine</label>
+    <select id="voiceEngine" style="width:100%;padding:8px;background:#11233a;color:white;border:1px solid #55718d;border-radius:6px"><option value="local">On-device Whisper (no speech service)</option><option value="browser">Browser speech service</option></select>
+    <div id="voiceEngineStatus" role="status" aria-live="polite" style="margin-top:8px;font-size:12px">Local recognition downloads a model on first use. No installation or API key. Keep this tab open; wait for “Listening”.</div>
   </div>
   <div class="mic-btn" id="chatToggleBtn" title="Chat with Hermes" style="background:radial-gradient(circle at 35% 30%, rgba(120,150,255,0.35), rgba(120,150,255,0.08)); border-color:rgba(120,150,255,0.4);">
     <svg viewBox="0 0 24 24" fill="none" stroke="#a8c0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -3364,6 +3367,124 @@ async function answerQuery(q){
   }
 }
 
+// Whisper runs in a dedicated worker. Audio is never sent to a transcription API.
+function localVoiceStatus(text){
+  const status=document.getElementById('voiceEngineStatus');
+  if(status) status.textContent=text;
+}
+class LocalWhisperRecognition {
+  constructor(){this.active=false;this.generation=0;this.worker=null;this.ready=null;this.frames=[];this.pre=[];this.samples=0;this.quiet=0;this.processing=false;}
+  async load(){
+    if(this.ready) return this.ready;
+    localVoiceStatus('Loading local speech model… First use requires an internet download.');
+    this.ready=new Promise((resolve,reject)=>{
+      const source=`let pipe;
+        async function init(){
+          const {pipeline,env}=await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1');
+          env.allowLocalModels=false; env.backends.onnx.wasm.numThreads=1;
+          pipe=await pipeline('automatic-speech-recognition','onnx-community/whisper-tiny.en',{
+            device:'wasm',dtype:'q8',progress_callback:p=>postMessage({type:'progress',text:p.file?('Loading '+p.file+(p.progress?' '+Math.round(p.progress)+'%':'')):'Preparing model…'})
+          });
+          postMessage({type:'ready'});
+        }
+        onmessage=async e=>{try{
+          if(e.data.type==='init') await init();
+          else { const output=await pipe(e.data.audio,{max_new_tokens:128});postMessage({type:'result',text:output.text,generation:e.data.generation}); }
+        }catch(error){postMessage({type:'error',text:error.message,generation:e.data.generation});}};`;
+      const url=URL.createObjectURL(new Blob([source],{type:'text/javascript'}));
+      this.worker=new Worker(url,{type:'module'});URL.revokeObjectURL(url);
+      const timer=setTimeout(()=>{this.worker?.terminate();this.worker=null;this.ready=null;reject(new Error('Speech model download timed out. Check access to Hugging Face and jsDelivr, then retry.'));},180000);
+      this.worker.onmessage=({data})=>{
+        if(data.type==='progress'){localVoiceStatus(data.text);return;}
+        if(data.type==='ready'){clearTimeout(timer);resolve();return;}
+        if(data.type==='error'){
+          clearTimeout(timer);this.processing=false;
+          if(data.generation===undefined){this.worker?.terminate();this.worker=null;this.ready=null;reject(new Error(data.text));}
+          else if(this.active && data.generation===this.generation)this.fail('local-engine',data.text);
+          return;
+        }
+        if(data.type==='result'){
+          this.processing=false;
+          if(!this.active || data.generation!==this.generation)return;
+          localVoiceStatus('Local model ready • Listening on this device');
+          if(data.text?.trim())this.onresult?.({resultIndex:0,results:[Object.assign([{transcript:data.text.trim()}],{isFinal:true})]});
+        }
+      };
+      this.worker.onerror=()=>{clearTimeout(timer);this.ready=null;this.worker?.terminate();this.worker=null;reject(new Error('Speech engine could not load. Open through HTTPS or localhost and check your network.'));if(this.active)this.fail('local-engine','Speech worker stopped. Click the microphone to retry.');};
+      this.worker.postMessage({type:'init'});
+    });
+    return this.ready;
+  }
+  start(){
+    if(this.active)throw new DOMException('Already listening','InvalidStateError');
+    this.active=true;const generation=++this.generation;
+    this.begin(generation).catch(e=>{if(this.active && generation===this.generation)this.fail(e.name==='NotAllowedError'?'not-allowed':'local-engine',e.message);});
+  }
+  async begin(generation){
+    if(!window.isSecureContext || !navigator.mediaDevices?.getUserMedia)throw new Error('Microphone access requires HTTPS or localhost. Open the app in its own browser tab.');
+    // Create/resume in the click call stack when a browser requires a gesture.
+    this.context=new (window.AudioContext||window.webkitAudioContext)();
+    this.context.resume().catch(()=>{});
+    const stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true},video:false});
+    if(!this.active || generation!==this.generation){stream.getTracks().forEach(t=>t.stop());return;}
+    this.stream=stream;
+    await this.load();
+    if(!this.active || generation!==this.generation)return;
+    if(this.context.state!=='running')throw new Error('Click the microphone to start audio. This browser requires a user click after page loading.');
+    this.source=this.context.createMediaStreamSource(stream);
+    this.node=this.context.createScriptProcessor(4096,1,1);
+    this.gain=this.context.createGain();this.gain.gain.value=0;
+    this.node.onaudioprocess=e=>this.capture(e.inputBuffer.getChannelData(0));
+    this.source.connect(this.node);this.node.connect(this.gain);this.gain.connect(this.context.destination);
+    stream.getAudioTracks().forEach(t=>t.onended=()=>{if(this.active)this.fail('audio-capture','Microphone disconnected. Reconnect it and click the microphone.');});
+    localVoiceStatus('Local model ready • Listening on this device');this.onstart?.();
+  }
+  capture(input){
+    if(!this.active || this.processing || voiceBusy || window.speechSynthesis?.speaking){this.resetFrames();return;}
+    const frame=new Float32Array(input);let energy=0;for(const v of frame)energy+=v*v;
+    const speech=Math.sqrt(energy/frame.length)>0.012;
+    if(!this.frames.length){
+      this.pre.push(frame);if(this.pre.length>3)this.pre.shift();
+      if(!speech)return;
+      this.frames=this.pre;this.pre=[];this.samples=this.frames.reduce((n,f)=>n+f.length,0);this.quiet=0;
+    }else{this.frames.push(frame);this.samples+=frame.length;this.quiet=speech?0:this.quiet+frame.length;}
+    const rate=this.context.sampleRate;
+    if(this.samples>=rate*15 || this.quiet>=rate*0.8){
+      if(this.samples-this.quiet<rate*0.25){this.resetFrames();return;}
+      const pcm=new Float32Array(this.samples);let offset=0;for(const f of this.frames){pcm.set(f,offset);offset+=f.length;}
+      const audio=new Float32Array(Math.floor(pcm.length*16000/rate));
+      for(let i=0;i<audio.length;i++){const x=i*rate/16000,j=Math.floor(x),a=x-j;audio[i]=pcm[j]*(1-a)+(pcm[j+1]??pcm[j])*a;}
+      this.resetFrames();this.processing=true;localVoiceStatus('Transcribing on this device… Please wait.');
+      this.worker.postMessage({type:'audio',audio,generation:this.generation},[audio.buffer]);
+    }
+  }
+  resetFrames(){this.frames=[];this.pre=[];this.samples=0;this.quiet=0;}
+  fail(error,message){this.onerror?.({error,message});this.abort();}
+  abort(){
+    this.active=false;++this.generation;
+    if(this.node)this.node.onaudioprocess=null;
+    this.source?.disconnect();this.node?.disconnect();this.gain?.disconnect();
+    this.stream?.getTracks().forEach(t=>{t.onended=null;t.stop();});
+    this.context?.close().catch(()=>{});
+    this.source=this.node=this.gain=this.stream=this.context=null;
+    this.resetFrames();localVoiceStatus('Local listening stopped');this.onend?.();
+  }
+  stop(){this.abort();}
+  dispose(){this.abort();this.worker?.terminate();this.worker=null;this.ready=null;}
+}
+function chosenVoiceEngine(){try{return localStorage.getItem('azzurro_voice_engine')||'local';}catch(e){return 'local';}}
+function initVoiceEngineControl(){
+  const select=document.getElementById('voiceEngine');select.value=chosenVoiceEngine();
+  select.onchange=()=>{
+    wakeWordMode=false;clearTimeout(voiceRestartTimer);clearTimeout(wakeCommandTimer);awaitingWakeCommand=false;
+    if(recognizer){recognizer.onend=null;recognizer.onerror=null;recognizer.onresult=null;recognizer.dispose?recognizer.dispose():recognizer.abort();}
+    recognizer=null;voiceStarting=false;voiceRunning=false;voiceLastError='';
+    try{localStorage.setItem('azzurro_voice_engine',select.value);}catch(e){}
+    initVoice(select.value);
+    if(recognizer && !wakeWordMode)micBtn.onclick();
+  };
+}
+
 let voiceLastError = '';
 let voiceStarting = false;
 let voiceRunning = false;
@@ -3375,7 +3496,7 @@ let voiceRestartTimer = null;
 let awaitingWakeCommand = false;
 let wakeCommandTimer = null;
 const WAKE_WORD = 'hey sara';
-const WAKE_COMMAND_TIMEOUT_MS = 8000;
+const WAKE_COMMAND_TIMEOUT_MS = 20000;
 
 function normalizeWakeText(text){
   return (text||'').toLowerCase().replace(/[,.!?;:]/g,' ').replace(/\s+/g,' ').trim();
@@ -3411,9 +3532,9 @@ function armWakeCommandWindow(){
 }
 
 
-function initVoice(){
+function initVoice(engineOverride){
   if(recognizer) return; // Reuse the same listener across sign-in and module changes.
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const SR = (engineOverride || chosenVoiceEngine())==='local' ? LocalWhisperRecognition : (window.SpeechRecognition || window.webkitSpeechRecognition);
   if(!SR){
     micBtn.title = "Voice recognition isn't supported in this browser — try Chrome or Edge desktop.";
     micBtn.style.opacity = 0.4;
@@ -3451,17 +3572,18 @@ function initVoice(){
     micBtn.classList.remove('listening');
     if(voiceManualSession){ voiceHeard.textContent='Could not hear that — try again.'; }
     if(e?.error==='network') voiceRetryDelay=Math.min(voiceRetryDelay*2,15000);
-    if(e && ['not-allowed','service-not-allowed','audio-capture','language-not-supported'].includes(e.error)){
+    if(e && ['not-allowed','service-not-allowed','audio-capture','language-not-supported','local-engine'].includes(e.error)){
       clearTimeout(voiceRestartTimer);
       clearTimeout(wakeCommandTimer);
       awaitingWakeCommand=false;
       voiceBox.classList.add('show');
-      voiceAnswer.textContent='Listening stopped: '+e.error+'. Allow microphone access in this site’s browser settings, then click the microphone to retry. Use the same HTTPS address or localhost; local-file and embedded previews may ask again.';
+      voiceAnswer.textContent=e.message || ('Listening stopped: '+e.error+'. Allow microphone access in this site’s browser settings, then click the microphone to retry. Use the same HTTPS address or localhost; local-file and embedded previews may ask again.');
       wakeWordMode=false;
-      setOrbState('', 'MICROPHONE PERMISSION REQUIRED');
+      setOrbState('', 'VOICE STOPPED: '+e.error);
     }
   };
   recognizer.onresult = async (event)=>{
+    if(!wakeWordMode && !voiceManualSession) return;
     if(voiceBusy || window.speechSynthesis?.speaking) return;
     voiceRetryDelay=500;
     const transcript = Array.from(event.results).slice(event.resultIndex || 0).filter(r=>r.isFinal).map(r=>r[0].transcript).join(' ').trim();
@@ -3542,11 +3664,13 @@ function initVoice(){
   };
   // Auto-start only with browser-confirmed permission; never prompt on every load.
   // No stored preference can substitute for an actual microphone permission grant.
+  const initializedRecognizer=recognizer;
   async function autoStartVoice(){
     try{
       if(!navigator.permissions?.query) throw new Error('permission-query-unavailable');
       const permission=await navigator.permissions.query({name:'microphone'});
       const startIfGranted=()=>{
+        if(recognizer!==initializedRecognizer)return;
         if(permission.state==='granted' && !wakeWordMode){
           micBtn.onclick();
         }else if(permission.state==='denied'){
@@ -3560,6 +3684,7 @@ function initVoice(){
         }
       };
       permission.onchange=()=>{
+        if(recognizer!==initializedRecognizer)return;
         if(permission.state!=='granted' && wakeWordMode) micBtn.onclick();
         startIfGranted();
       };
@@ -3571,6 +3696,7 @@ function initVoice(){
     }
   }
   autoStartVoice();
+  if(!document.getElementById('voiceEngine').onchange) initVoiceEngineControl();
 }
 
 // ---------- auth ----------
