@@ -3782,6 +3782,30 @@ function resumeVoiceFromIcon(forceReconnect=false){
   setOrbState('listening','HEY SARA STANDBY');
   return true;
 }
+function stopVoiceFromIcon(){
+  // An icon tap is an explicit microphone-off request, not merely a command pause.
+  wakeWordMode=false;
+  commandSessionActive=false;
+  commandSessionStarted=false;
+  awaitingWakeCommand=false;
+  wakeCommandDeadline=0;
+  voiceBusy=false;
+  clearTimeout(wakeCommandTimer);
+  clearTimeout(voiceRestartTimer);
+  ++responseSpeechSerial;
+  clearTimeout(responseStartTimer);
+  activeResponseUtterance=null;
+  window.speechSynthesis?.cancel();
+  try{recognizer?.abort();}catch(e){}
+  voiceStarting=false;
+  voiceRunning=false;
+  micBtn.classList.remove('listening');
+  micBtn.title='Start listening';
+  voiceHeard.textContent='Microphone stopped';
+  voiceAnswer.textContent='Tap the microphone icon or AZZURRO ORB to start wake-word listening again.';
+  localVoiceStatus('Microphone off');
+  setOrbState('','MICROPHONE OFF');
+}
 function startVoiceRecognition(manual=false){
   if(!currentUser || !recognizer || voiceStarting || voiceRunning || (!wakeWordMode && !manual)) return;
   clearTimeout(voiceRestartTimer);
@@ -3958,37 +3982,17 @@ function initVoice(engineOverride){
     setTimeout(()=>setOrbState('', wakeWordMode?(commandSessionActive?'COMMAND LISTENING ACTIVE':'HEY SARA READY'):'OPERATIONS AI ONLINE'),1200);
   };
 
-  // Mic and ORB pause commands while preserving wake-word detection.
-  micBtn.onclick = (event)=>{
+  // The microphone and ORB are one true on/off toggle. Starting still enters
+  // wake-word standby, so speech is never sent to Hermes without Hey Sara.
+  micBtn.onclick = ()=>{
     if(!currentUser){lockVoiceUntilSignIn();micBtn.onclick();return;}
     voiceLastError='';
     voiceBox.classList.add('show');
-    if(wakeWordMode && commandSessionActive){
-      window.speechSynthesis?.cancel();
-      enterVoiceStandby();
-      // Keep standby capture alive; Safari may have silently suspended it.
-      if(recognizer instanceof LocalWhisperRecognition)resumeVoiceFromIcon(true);
-      return;
-    }
-    // Safari can report a healthy track while no audio frames arrive. A tap in
-    // standby therefore performs a hard local-capture restart unconditionally.
-    if(recognizer instanceof LocalWhisperRecognition){
-      resumeVoiceFromIcon(true);
-      return;
-    }
-    if(voiceInputNeedsRecovery()){
-      resumeVoiceFromIcon();
-      return;
-    }
-    const wasEnabled=wakeWordMode;
-    wakeWordMode=true;
-    commandSessionActive=false; // Clicking cannot bypass the wake-word gate.
-    commandSessionStarted=commandSessionActive;
-    micBtn.title=commandSessionActive?'Pause commands — keep wake-word standby':'Wake-word standby — say Hey Sara';
-    voiceHeard.textContent=commandSessionActive?'Command listening enabled':'Wake-word standby enabled';
-    voiceAnswer.textContent=commandSessionActive?'Commands are accepted only during the 10 seconds after a wake phrase.':'Say Hey Sara to activate commands. Microphone remains on for wake-word detection.';
-    setOrbState('listening',commandSessionActive?'COMMAND LISTENING ACTIVE':'HEY SARA STANDBY');
-    startVoiceRecognition(false);
+    const listeningEnabled=wakeWordMode || voiceStarting || voiceRunning ||
+      (recognizer instanceof LocalWhisperRecognition && recognizer.active);
+    if(listeningEnabled){stopVoiceFromIcon();return;}
+    // A fresh user gesture lets Safari reclaim a muted/suspended audio session.
+    resumeVoiceFromIcon(true);
   };
   // Auto-start only with browser-confirmed permission; never prompt on every load.
   // No stored preference can substitute for an actual microphone permission grant.
