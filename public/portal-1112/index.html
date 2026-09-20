@@ -3218,7 +3218,9 @@ async function sendRawToHermes(cfg, messages){
   return data.choices?.[0]?.message?.content || '(no response)';
 }
 
-async function callHermes(userText){
+async function callHermes(userText, voiceEpoch=null){
+  const checkVoiceAuth=()=>{if(voiceEpoch!==null && (!currentUser || voiceEpoch!==voiceAuthEpoch))throw new Error('Sign in to use voice commands.');};
+  checkVoiceAuth();
   const cfg = getHermesConfig();
   if(!cfg || !cfg.url){
     // Fall back to the existing lightweight keyword-based answers
@@ -3235,6 +3237,7 @@ async function callHermes(userText){
       ]).catch(()=>{ /* even if this errors, still try the real question below */ });
       hermesModelApplied = cfg.model;
     }
+    checkVoiceAuth();
     chatHistory.push({ role:'user', content:userText });
     const reply = await sendRawToHermes(cfg, [
       { role:'system', content:'You are the AI assistant embedded in the SoftService Ops Command Center. Answer concisely using your connected tools for live data (sites, complaints, feedback, contracts, KPIs) whenever relevant.' },
@@ -3495,6 +3498,7 @@ function initVoiceEngineControl(){
   };
 }
 
+let voiceAuthEpoch = 0;
 let voiceLastError = '';
 let voiceStarting = false;
 let voiceRunning = false;
@@ -3548,7 +3552,7 @@ function refreshCommandTimeout(){
   wakeCommandTimer=setTimeout(check,WAKE_COMMAND_TIMEOUT_MS);
 }
 function gateWakeTranscript(transcript){
-  if(!wakeWordMode)return {kind:'ignore'};
+  if(!currentUser || !wakeWordMode)return {kind:'ignore'};
   const afterWake=stripWakeWord(transcript);
   if(afterWake!==null){
     commandSessionActive=true;
@@ -3562,7 +3566,7 @@ function gateWakeTranscript(transcript){
   return {kind:'ignore'};
 }
 function startVoiceRecognition(manual=false){
-  if(!recognizer || voiceStarting || voiceRunning || (!wakeWordMode && !manual)) return;
+  if(!currentUser || !recognizer || voiceStarting || voiceRunning || (!wakeWordMode && !manual)) return;
   clearTimeout(voiceRestartTimer);
   voiceManualSession = manual;
   voiceStarting = true;
@@ -3584,7 +3588,26 @@ function armWakeCommandWindow(){
   refreshCommandTimeout();
 }
 
+function lockVoiceUntilSignIn(){
+  ++voiceAuthEpoch;
+  wakeWordMode=false;commandSessionActive=false;commandSessionStarted=false;
+  awaitingWakeCommand=false;wakeCommandDeadline=0;voiceBusy=false;
+  clearTimeout(voiceRestartTimer);clearTimeout(wakeCommandTimer);
+  const old=recognizer;recognizer=null;
+  if(old){
+    old.onstart=old.onend=old.onresult=old.onerror=null;
+    try{old.dispose?old.dispose():old.abort();}catch(e){}
+  }
+  voiceStarting=false;voiceRunning=false;
+  window.speechSynthesis?.cancel();
+  micBtn.classList.remove('listening');
+  micBtn.title='Sign in to enable voice commands';
+  micBtn.onclick=()=>{voiceBox.classList.add('show');voiceHeard.textContent='Voice commands locked';voiceAnswer.textContent='Please sign in to use the microphone and voice commands.';};
+  localVoiceStatus('Sign in to enable voice recognition');
+  setOrbState('', 'SIGN IN FOR VOICE');
+}
 function initVoice(engineOverride){
+  if(!currentUser){lockVoiceUntilSignIn();return;}
   if(recognizer) return; // Reuse the same listener across sign-in and module changes.
   const SR = (engineOverride || chosenVoiceEngine())==='local' ? LocalWhisperRecognition : (window.SpeechRecognition || window.webkitSpeechRecognition);
   if(!SR){
@@ -3600,6 +3623,7 @@ function initVoice(engineOverride){
   recognizer.maxAlternatives = 1;
 
   recognizer.onstart = ()=>{
+    if(!currentUser){lockVoiceUntilSignIn();return;}
     voiceStarting=false; voiceRunning=true; voiceLastError='';
     voiceHeard.textContent=commandSessionActive?'Command listening active — speak your next command':'Microphone listening — say Hey Sara';
     micBtn.classList.add('listening');
@@ -3638,7 +3662,8 @@ function initVoice(engineOverride){
   recognizer.onspeechstart=()=>{utteranceStartedAt=Date.now();utteranceDuration=0;};
   recognizer.onspeechend=()=>{if(utteranceStartedAt)utteranceDuration=Date.now()-utteranceStartedAt;};
   recognizer.onresult = async (event)=>{
-    if(!wakeWordMode) return;
+    if(!currentUser || !wakeWordMode) return;
+    const commandAuthEpoch=voiceAuthEpoch;
     if(window.speechSynthesis?.speaking) return;
     voiceRetryDelay=500;
     const transcript = Array.from(event.results).slice(event.resultIndex || 0).filter(r=>r.isFinal).map(r=>r[0].transcript).join(' ').trim();
@@ -3683,15 +3708,15 @@ function initVoice(engineOverride){
     }, 6000);
     let answer;
     try{
-      try{ answer = await callHermes(command); }
-      catch(e){ answer = await answerQuery(command); }
+      try{ answer = await callHermes(command, commandAuthEpoch); }
+      catch(e){ if(commandAuthEpoch!==voiceAuthEpoch || !currentUser)return; answer = await answerQuery(command); }
     }catch(e){
       answer='The command could not be completed. Please try your command again.';
     }finally{
       clearTimeout(wakeTimer);
-      voiceBusy=false;
+      if(commandAuthEpoch===voiceAuthEpoch)voiceBusy=false;
     }
-    if(!wakeWordMode) return;
+    if(!currentUser || commandAuthEpoch!==voiceAuthEpoch || !wakeWordMode) return;
     voiceAnswer.textContent = answer;
     setOrbState('speaking','AZZURRO RESPONDING');
     speak(answer);
@@ -3700,6 +3725,7 @@ function initVoice(engineOverride){
 
   // Mic and ORB pause commands while preserving wake-word detection.
   micBtn.onclick = (event)=>{
+    if(!currentUser){lockVoiceUntilSignIn();micBtn.onclick();return;}
     voiceLastError='';
     voiceBox.classList.add('show');
     if(wakeWordMode && commandSessionActive){
@@ -3725,7 +3751,7 @@ function initVoice(engineOverride){
       if(!navigator.permissions?.query) throw new Error('permission-query-unavailable');
       const permission=await navigator.permissions.query({name:'microphone'});
       const startIfGranted=()=>{
-        if(recognizer!==initializedRecognizer)return;
+        if(!currentUser || recognizer!==initializedRecognizer)return;
         if(permission.state==='granted' && !wakeWordMode){
           micBtn.onclick();
         }else if(permission.state==='denied'){
@@ -3739,7 +3765,7 @@ function initVoice(engineOverride){
         }
       };
       permission.onchange=()=>{
-        if(recognizer!==initializedRecognizer)return;
+        if(!currentUser || recognizer!==initializedRecognizer)return;
         if(permission.state!=='granted' && wakeWordMode){
           wakeWordMode=false;
           enterVoiceStandby();
@@ -3841,8 +3867,10 @@ document.getElementById('loginPassword').addEventListener('keydown', (e)=>{ if(e
 document.getElementById('cancelLogin').onclick = ()=> document.getElementById('loginScreen').classList.remove('show');
 document.getElementById('loginNavBtn').onclick = showLoginScreen;
 document.getElementById('logoutBtn').onclick = async ()=>{
+  currentUser=null;currentRole=null;currentAllowedTabs=null;
+  lockVoiceUntilSignIn();
   if(sb) await sb.auth.signOut();
-  currentUser = null; currentRole = null;
+  currentUser = null; currentRole = null; currentAllowedTabs=null;
   currentTab = 'dashboard';
   updateUserBadge();
   renderTabs();
@@ -3851,6 +3879,12 @@ document.getElementById('logoutBtn').onclick = async ()=>{
 
 // ---------- boot ----------
 if(createSupabaseClient()){
+  sb.auth.onAuthStateChange((event)=>{
+    if(event==='SIGNED_OUT'){
+      currentUser=null;currentRole=null;currentAllowedTabs=null;
+      lockVoiceUntilSignIn();
+    }
+  });
   bootGuest();
 } else {
   document.getElementById('connText').textContent = 'Library failed to load';
