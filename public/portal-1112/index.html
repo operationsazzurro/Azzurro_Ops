@@ -770,7 +770,7 @@ async function enhanceCommandDashboard(el){
         </div>
         <div class="orb-title">AZZURRO</div>
         <div class="orb-status" id="commandOrbStatus">OPERATIONS AI ONLINE</div>
-        <div class="orb-prompt" id="commandOrbPrompt">Say “Hey Saara”, “Hi Sara”, or “Hey Sara” to activate commands. After 10 seconds of inactivity, or “stop listening”, wake-word standby resumes. The mic or ORB turns the microphone off or on. Navigation is handled instantly; reasoning and operational questions are sent to Hermes.</div>
+        <div class="orb-prompt" id="commandOrbPrompt">Say “Hey Saara”, “Hi Sara”, or “Hey Sara” to open a fixed 10-second command window. Commands within that window are accepted; speech outside it is discarded. Ten seconds after the wake phrase, or on “stop listening”, standby resumes. Click the mic or ORB to pause commands while keeping wake-word detection active; say Hey Sara to open another command window. Navigation is handled instantly; reasoning and operational questions are sent to Hermes.</div>
         <div class="command-input"><input id="commandInput" placeholder="Ask or speak a command…" autocomplete="off"><button class="btn btn-primary" id="commandSend">Execute</button></div>
         <div class="command-quick">
           <button class="quick-chip" data-cmd="Open complaints">Open Complaints</button><button class="quick-chip" data-cmd="Open KPI">Open KPI</button><button class="quick-chip" data-cmd="Open staff">Open Staff</button><button class="quick-chip" data-cmd="Open manager visits">Manager Visits</button>
@@ -3443,14 +3443,23 @@ class LocalWhisperRecognition {
     if(!this.active || this.processing || voiceBusy || window.speechSynthesis?.speaking){this.resetFrames();return;}
     const frame=new Float32Array(input);let energy=0;for(const v of frame)energy+=v*v;
     const speech=Math.sqrt(energy/frame.length)>0.012;
-    if(speech && commandSessionActive)refreshCommandTimeout();
+
+    if(this.discardLongUtterance){
+      this.longSilence=speech?0:(this.longSilence||0)+frame.length;
+      if(this.longSilence>=this.context.sampleRate*0.8){this.discardLongUtterance=false;this.longSilence=0;}
+      return;
+    }
     if(!this.frames.length){
       this.pre.push(frame);if(this.pre.length>3)this.pre.shift();
       if(!speech)return;
       this.frames=this.pre;this.pre=[];this.samples=this.frames.reduce((n,f)=>n+f.length,0);this.quiet=0;
     }else{this.frames.push(frame);this.samples+=frame.length;this.quiet=speech?0:this.quiet+frame.length;}
     const rate=this.context.sampleRate;
-    if(this.samples>=rate*15 || this.quiet>=rate*0.8){
+    if(this.samples-this.quiet>rate*10){
+      this.resetFrames();this.discardLongUtterance=true;this.longSilence=0;
+      localVoiceStatus('Speech over 10 seconds discarded. Start again with Hey Sara.');return;
+    }
+    if(this.quiet>=rate*0.8){
       if(this.samples-this.quiet<rate*0.25){this.resetFrames();return;}
       const pcm=new Float32Array(this.samples);let offset=0;for(const f of this.frames){pcm.set(f,offset);offset+=f.length;}
       const audio=new Float32Array(Math.floor(pcm.length*16000/rate));
@@ -3468,7 +3477,7 @@ class LocalWhisperRecognition {
     this.stream?.getTracks().forEach(t=>{t.onended=null;t.stop();});
     this.context?.close().catch(()=>{});
     this.source=this.node=this.gain=this.stream=this.context=null;
-    this.resetFrames();localVoiceStatus('Local listening stopped');this.onend?.();
+    this.resetFrames();this.discardLongUtterance=false;this.longSilence=0;localVoiceStatus('Local listening stopped');this.onend?.();
   }
   stop(){this.abort();}
   dispose(){this.abort();this.worker?.terminate();this.worker=null;this.ready=null;}
@@ -3507,7 +3516,7 @@ function normalizeWakeText(text){
 }
 function stripWakeWord(text){
   const n=normalizeWakeText(text);
-  const match=/\b(?:hey|hi)\s+(?:saara|sara|sarah)\b/.exec(n);
+  const match=/^(?:hey|hi)\s+(?:saara|sara|sarah)\b/.exec(n);
   if(!match) return null;
   return n.slice(match.index+match[0].length).trim();
 }
@@ -3521,8 +3530,9 @@ function enterVoiceStandby(){
   commandSessionStarted=false;
   awaitingWakeCommand=false;
   wakeCommandDeadline=0;
+  micBtn.title='Wake-word standby — say Hey Sara';
   voiceHeard.textContent='Standby — say Hey Sara to activate';
-  voiceAnswer.textContent='Commands paused. Waiting for the wake phrase.';
+  voiceAnswer.textContent='Commands paused. Microphone stays on for Hey Sara. Say the wake phrase to open a new 10-second command window.';
   setOrbState('',wakeWordMode?'HEY SARA STANDBY':'MICROPHONE OFF');
 }
 function refreshCommandTimeout(){
@@ -3531,10 +3541,6 @@ function refreshCommandTimeout(){
   wakeCommandDeadline=Date.now()+WAKE_COMMAND_TIMEOUT_MS;
   const check=()=>{
     if(!wakeWordMode || !commandSessionActive)return;
-    if(voiceBusy || window.speechSynthesis?.speaking || recognizer?.processing){
-      wakeCommandDeadline=Date.now()+WAKE_COMMAND_TIMEOUT_MS;
-      wakeCommandTimer=setTimeout(check,500);return;
-    }
     const remaining=wakeCommandDeadline-Date.now();
     if(remaining>0){wakeCommandTimer=setTimeout(check,remaining);return;}
     enterVoiceStandby();
@@ -3547,10 +3553,12 @@ function gateWakeTranscript(transcript){
   if(afterWake!==null){
     commandSessionActive=true;
     commandSessionStarted=true;
-    refreshCommandTimeout();
+    refreshCommandTimeout(); // Only a wake phrase opens a fresh ten-second window.
     return afterWake ? {kind:'command',command:afterWake} : {kind:'wake'};
   }
-  if(commandSessionActive && transcript.trim()){refreshCommandTimeout();return {kind:'command',command:transcript.trim()};}
+  if(commandSessionActive && Date.now()<wakeCommandDeadline && transcript.trim()){
+    return {kind:'command',command:transcript.trim()};
+  }
   return {kind:'ignore'};
 }
 function startVoiceRecognition(manual=false){
@@ -3570,7 +3578,7 @@ function armWakeCommandWindow(){
   clearTimeout(wakeCommandTimer);
   voiceBox.classList.add('show');
   voiceHeard.textContent='Hey Sara detected — command listening active';
-  voiceAnswer.textContent='Yes? Speak your command. After 10 seconds without another command, I return to standby.';
+  voiceAnswer.textContent='Yes? Give your commands within 10 seconds. The timer does not restart after a command.';
   setOrbState('listening','COMMAND LISTENING ACTIVE');
   speak('Yes?');
   refreshCommandTimeout();
@@ -3626,6 +3634,9 @@ function initVoice(engineOverride){
       setOrbState('', 'VOICE STOPPED: '+e.error);
     }
   };
+  let utteranceStartedAt=0, utteranceDuration=0;
+  recognizer.onspeechstart=()=>{utteranceStartedAt=Date.now();utteranceDuration=0;};
+  recognizer.onspeechend=()=>{if(utteranceStartedAt)utteranceDuration=Date.now()-utteranceStartedAt;};
   recognizer.onresult = async (event)=>{
     if(!wakeWordMode) return;
     if(window.speechSynthesis?.speaking) return;
@@ -3637,6 +3648,8 @@ function initVoice(engineOverride){
       enterVoiceStandby();
       return;
     }
+    if(utteranceDuration>10000){utteranceDuration=0;enterVoiceStandby();return;}
+    utteranceDuration=0;
     if(voiceBusy) return;
     let command = transcript;
 
@@ -3651,17 +3664,14 @@ function initVoice(engineOverride){
       return;
     }
     command=gated.command;
-    // Pause the inactivity timer during command processing; rearm after dispatch.
+    // The wake window is fixed: commands and replies never extend its deadline.
     awaitingWakeCommand=false;
-    wakeCommandDeadline=0;
-    clearTimeout(wakeCommandTimer);
     voiceBox.classList.add('show');
     voiceHeard.textContent='Command: “'+command+'”';
 
     // Navigation commands stay local and instant. Hermes is reserved for reasoning/thinking.
     if(commandNavigate(command)){
-      voiceAnswer.textContent='Opening the requested section. Waiting up to 10 seconds for your next command.';
-      refreshCommandTimeout();
+      voiceAnswer.textContent='Opening the requested section. Further commands are accepted only until the current wake window expires.';
       return;
     }
 
@@ -3681,39 +3691,31 @@ function initVoice(engineOverride){
       clearTimeout(wakeTimer);
       voiceBusy=false;
     }
-    if(!wakeWordMode || !commandSessionActive) return;
+    if(!wakeWordMode) return;
     voiceAnswer.textContent = answer;
     setOrbState('speaking','AZZURRO RESPONDING');
     speak(answer);
-    refreshCommandTimeout();
     setTimeout(()=>setOrbState('', wakeWordMode?(commandSessionActive?'COMMAND LISTENING ACTIVE':'HEY SARA READY'):'OPERATIONS AI ONLINE'),1200);
   };
 
-  // First click grants microphone permission and enables hands-free wake-word mode.
+  // Mic and ORB pause commands while preserving wake-word detection.
   micBtn.onclick = (event)=>{
     voiceLastError='';
-    wakeWordMode = !wakeWordMode;
-    if(wakeWordMode){
-      commandSessionActive=Boolean(event) || commandSessionStarted;
-      if(commandSessionActive)commandSessionStarted=true;
-      micBtn.title='Click to stop listening';
-      voiceBox.classList.add('show');
-      voiceHeard.textContent=commandSessionActive?'Command listening enabled':'Wake-word standby enabled';
-      voiceAnswer.textContent=commandSessionActive?'Speak your command. After 10 seconds of inactivity, standby resumes. Say stop listening to return to standby now.':'Say Hey Saara, Hi Sara, or Hey Sara to activate commands. Say stop listening to return to wake-word standby.';
-      setOrbState('listening','ENABLING HEY SARA');
-      startVoiceRecognition(false);
-      refreshCommandTimeout();
-    }else{
-      commandSessionActive=false;
-      micBtn.title='Resume command listening';
-      clearTimeout(voiceRestartTimer);
+    voiceBox.classList.add('show');
+    if(wakeWordMode && commandSessionActive){
       window.speechSynthesis?.cancel();
-      awaitingWakeCommand=false; clearTimeout(wakeCommandTimer);
-      try{recognizer.abort();}catch(e){}
-      setOrbState('', 'OPERATIONS AI ONLINE');
-      voiceHeard.textContent='Listening stopped — click the microphone or ORB to resume';
-      voiceAnswer.textContent='';
+      enterVoiceStandby();
+      return;
     }
+    const wasEnabled=wakeWordMode;
+    wakeWordMode=true;
+    commandSessionActive=false; // Clicking cannot bypass the wake-word gate.
+    commandSessionStarted=commandSessionActive;
+    micBtn.title=commandSessionActive?'Pause commands — keep wake-word standby':'Wake-word standby — say Hey Sara';
+    voiceHeard.textContent=commandSessionActive?'Command listening enabled':'Wake-word standby enabled';
+    voiceAnswer.textContent=commandSessionActive?'Commands are accepted only during the 10 seconds after a wake phrase.':'Say Hey Sara to activate commands. Microphone remains on for wake-word detection.';
+    setOrbState('listening',commandSessionActive?'COMMAND LISTENING ACTIVE':'HEY SARA STANDBY');
+    startVoiceRecognition(false);
   };
   // Auto-start only with browser-confirmed permission; never prompt on every load.
   // No stored preference can substitute for an actual microphone permission grant.
@@ -3738,7 +3740,12 @@ function initVoice(engineOverride){
       };
       permission.onchange=()=>{
         if(recognizer!==initializedRecognizer)return;
-        if(permission.state!=='granted' && wakeWordMode) micBtn.onclick();
+        if(permission.state!=='granted' && wakeWordMode){
+          wakeWordMode=false;
+          enterVoiceStandby();
+          clearTimeout(voiceRestartTimer);
+          try{recognizer.abort();}catch(e){}
+        }
         startIfGranted();
       };
       startIfGranted();
