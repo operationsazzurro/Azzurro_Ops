@@ -148,10 +148,20 @@
   .voice-transcript{
     max-width:340px; background:rgba(6,10,18,0.9); border:1px solid var(--panel-border-strong); border-radius:12px;
     padding:12px 14px; font-size:12.5px; color:var(--text-mid); backdrop-filter: blur(16px);
-    display:none;
+    display:none; position:relative;
   }
   .voice-transcript.show{display:block;}
   .voice-transcript .answer{color:var(--text-hi); margin-top:6px; line-height:1.5;}
+  .voice-minimize-btn{
+    position:absolute; top:8px; right:8px; width:26px; height:26px; min-width:26px; min-height:26px;
+    border:1px solid var(--panel-border); border-radius:6px; background:rgba(255,255,255,0.06);
+    color:var(--text-hi); font-size:14px; line-height:1; cursor:pointer; z-index:6; padding:0;
+  }
+  .voice-minimize-btn:hover{background:rgba(255,255,255,0.12);}
+  .voice-transcript[data-minimized="true"]{ max-width:220px; padding:10px 40px 10px 12px; cursor:pointer; }
+  .voice-transcript[data-minimized="true"] > *:not(.voice-minimize-btn):not(#voiceMinimizedLabel){ display:none !important; }
+  .voice-transcript[data-minimized="true"] #voiceMinimizedLabel{ display:block !important; font-size:12px; color:var(--text-mid); }
+  #voiceMinimizedLabel{ display:none; }
   .mic-btn{
     width:56px; height:56px; border-radius:50%; border:1px solid rgba(94,234,212,0.4);
     background:radial-gradient(circle at 35% 30%, rgba(94,234,212,0.35), rgba(94,234,212,0.08));
@@ -549,7 +559,9 @@ button,[role="button"],.mic-btn{touch-action:manipulation}
     </div>
   </div>
   <button class="mobile-voice-toggle" id="mobileVoiceToggle" type="button" aria-controls="voiceBox" aria-expanded="false">Voice details</button>
-  <div class="voice-transcript" id="voiceBox" data-mobile-collapsed="true">
+  <div class="voice-transcript" id="voiceBox" data-mobile-collapsed="true" data-minimized="false">
+    <button class="voice-minimize-btn" id="voiceMinimizeBtn" type="button" aria-label="Minimize voice panel" title="Minimize">–</button>
+    <div id="voiceMinimizedLabel">🎙 Voice active — tap to expand</div>
     <button class="mobile-panel-close" id="mobileVoiceClose" type="button" aria-label="Close voice details">×</button>
     <div id="voiceHeard"></div>
     <div style="margin-top:10px;border-top:1px solid #55718d;padding-top:8px">
@@ -1280,8 +1292,9 @@ function openProjectManagersPanel(){
 
   (async ()=>{
     const writeOk = canWrite();
+    const SUBMISSION_LABELS = { not_required: 'Timesheet not required', timesheet_only: 'Timesheet only', timesheet_and_wcr: 'Timesheet & WCR' };
     const [{ data: projects, error: pErr }, { data: people, error: oErr }] = await Promise.all([
-      sb.from('projects').select('id, project_name, project_code, project_manager_id, requires_wcr, contracts(clients(client_name))').order('project_name'),
+      sb.from('projects').select('id, project_name, project_code, project_manager_id, submission_requirement, contracts(clients(client_name))').order('project_name'),
       sb.from('org_hierarchy').select('id, full_name, designation').order('full_name'),
     ]);
     if(pErr || oErr){
@@ -1295,7 +1308,9 @@ function openProjectManagersPanel(){
     wrap.innerHTML = `
       <p class="hint" style="margin-bottom:10px;">Both settings save immediately when changed. Submission requirement applies to every site under that project — invoices are generated per project, so this is set here rather than per site.</p>
       <div style="display:flex; flex-direction:column; gap:10px; max-height:420px; overflow-y:auto;">
-        ${projects.map(p=>`
+        ${projects.map(p=>{
+          const req = p.submission_requirement || 'timesheet_only';
+          return `
           <div style="border:1px solid var(--panel-border); border-radius:8px; padding:10px 12px;">
             <div style="font-size:13px; color:var(--text-hi); font-weight:500;">${esc(p.project_name)}${p.project_code?` <span style="color:var(--text-dim); font-weight:400;">[${esc(p.project_code)}]</span>`:''}</div>
             <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:6px;">${esc(p.contracts?.clients?.client_name||'No client linked')}</div>
@@ -1305,18 +1320,19 @@ function openProjectManagersPanel(){
                   <option value="">— No manager assigned —</option>
                   ${people.map(person=>`<option value="${person.id}" ${person.id===p.project_manager_id?'selected':''}>${esc(person.full_name)}${person.designation?' — '+esc(person.designation):''}</option>`).join('')}
                 </select>
-                <select data-project-id="${p.id}" data-field="requires_wcr">
-                  <option value="false" ${!p.requires_wcr?'selected':''}>Timesheet only</option>
-                  <option value="true" ${p.requires_wcr?'selected':''}>Timesheet & WCR</option>
+                <select data-project-id="${p.id}" data-field="submission_requirement">
+                  <option value="not_required" ${req==='not_required'?'selected':''}>Timesheet not required</option>
+                  <option value="timesheet_only" ${req==='timesheet_only'?'selected':''}>Timesheet only</option>
+                  <option value="timesheet_and_wcr" ${req==='timesheet_and_wcr'?'selected':''}>Timesheet & WCR</option>
                 </select>
                 <span class="pm-save-status" data-status-for="${p.id}" style="font-size:11px; color:var(--cyan-bright);"></span>
               </div>
             ` : `<div style="font-size:12.5px; color:var(--text-mid);">
                 ${p.project_manager_id ? esc((people.find(pe=>pe.id===p.project_manager_id)||{}).full_name || '—') : 'No manager assigned'}
-                &nbsp;·&nbsp; ${p.requires_wcr ? 'Timesheet & WCR' : 'Timesheet only'}
+                &nbsp;·&nbsp; ${SUBMISSION_LABELS[req]}
               </div>`}
           </div>
-        `).join('')}
+        `;}).join('')}
       </div>
     `;
     if(writeOk){
@@ -1324,8 +1340,8 @@ function openProjectManagersPanel(){
         sel.onchange = async (e)=>{
           const projectId = e.target.dataset.projectId;
           const field = e.target.dataset.field;
-          const value = field === 'requires_wcr' ? (e.target.value === 'true') : (e.target.value || null);
-          const column = field === 'requires_wcr' ? 'requires_wcr' : 'project_manager_id';
+          const value = field === 'submission_requirement' ? e.target.value : (e.target.value || null);
+          const column = field === 'submission_requirement' ? 'submission_requirement' : 'project_manager_id';
           const statusEl = wrap.querySelector(`[data-status-for="${projectId}"]`);
           statusEl.textContent = 'Saving…';
           const { error } = await sb.from('projects').update({ [column]: value }).eq('id', projectId);
@@ -1428,8 +1444,9 @@ function openContractForm(clients, editingRow){
     <div class="field"><label>Project code (optional)</label><input id="cf_projectcode" type="text" placeholder="e.g. PRJ-AUH-014"></div>
     <div class="field"><label>Submission requirement</label>
       <select id="cf_requiresWcr">
-        <option value="false" selected>Timesheet only</option>
-        <option value="true">Timesheet & WCR</option>
+        <option value="not_required">Timesheet not required</option>
+        <option value="timesheet_only" selected>Timesheet only</option>
+        <option value="timesheet_and_wcr">Timesheet & WCR</option>
       </select>
       <p class="hint" style="margin-top:4px;">Applies to every site created under this project — invoices are generated per project, so this is set here rather than per site. Can be changed later from Contracts → Managers & Submission Requirements.</p>
     </div>
@@ -1480,7 +1497,7 @@ function openContractForm(clients, editingRow){
           contract_id: contractData.id,
           project_name: projectName,
           project_code: projectCode || null,
-          requires_wcr: document.getElementById('cf_requiresWcr').value === 'true'
+          submission_requirement: document.getElementById('cf_requiresWcr').value
         });
         if(projErr) alert('Contract saved, but the project could not be created: '+projErr.message);
       }
@@ -1645,7 +1662,7 @@ async function renderStaff(el){
 }
 
 async function renderInvoices(el){
-  const { data, error } = await sb.from('invoice_wcr_submissions').select('*, sites(site_name, site_incharge_id, projects(project_name, project_manager_id, requires_wcr, org_hierarchy(full_name)))').order('billing_month',{ascending:false});
+  const { data, error } = await sb.from('invoice_wcr_submissions').select('*, sites(site_name, site_incharge_id, projects(project_name, project_manager_id, submission_requirement, org_hierarchy(full_name)))').order('billing_month',{ascending:false});
   if(error) throw error;
   const rows = data||[];
   const writeOk = canWrite();
@@ -1654,19 +1671,23 @@ async function renderInvoices(el){
       <button class="btn" id="exportInvoiceBtn">⬇ Export Excel</button>
       ${writeOk?'<button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Entry</button>':''}
     </div></div>
-    <p class="hint" style="margin-bottom:12px;">Each site's Submission Requirement (Timesheet only, or Timesheet & WCR) is set on the site itself — edit it from the Sites tab. The assigned Site Manager gets a daily reminder email until their site's required submission(s) for the month are marked Verified.</p>
+    <p class="hint" style="margin-bottom:12px;">Each project's Submission Requirement (Timesheet not required, Timesheet only, or Timesheet & WCR) is set from Contracts → Managers & Submission Requirements, applying to every site under that project. The assigned Site Manager gets a daily reminder email until their site's required submission(s) for the month are marked Verified.</p>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Manager</th><th>Billing Month</th><th>Timesheet Status</th><th>WCR Status</th><th>Invoice Status</th><th>Invoice Date</th><th>Amount</th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>{
       const mgr = r.sites?.projects?.org_hierarchy?.full_name || 'Unassigned';
-      const requiresWcr = !!r.sites?.projects?.requires_wcr;
+      const submissionReq = r.sites?.projects?.submission_requirement || 'timesheet_only';
+      const requiresTimesheet = submissionReq !== 'not_required';
+      const requiresWcr = submissionReq === 'timesheet_and_wcr';
       const fmtUpdated = (ts)=> ts ? new Date(ts).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '';
       const tsUpdated = fmtUpdated(r.timesheet_status_updated_at);
       const wcrUpdated = fmtUpdated(r.wcr_status_updated_at);
       const invUpdated = fmtUpdated(r.invoice_status_updated_at);
       const statusBadgeClass = (s)=> s==='Verified - Shared to Accounts'?'done':s==='Submitted to Coordinator'?'progress':'open';
-      const timesheetBadge = r.timesheet_status
-        ? `<span class="badge ${statusBadgeClass(r.timesheet_status)}">${esc(r.timesheet_status)}</span>`
-        : `<span class="badge open">Not Submitted</span>`;
+      const timesheetBadge = !requiresTimesheet
+        ? `<span style="color:var(--text-dim); font-size:11.5px;">Not required</span>`
+        : (r.timesheet_status
+          ? `<span class="badge ${statusBadgeClass(r.timesheet_status)}">${esc(r.timesheet_status)}</span>`
+          : `<span class="badge open">Not Submitted</span>`);
       const wcrBadge = !requiresWcr
         ? `<span style="color:var(--text-dim); font-size:11.5px;">Not required</span>`
         : (r.wcr_status
@@ -1679,7 +1700,7 @@ async function renderInvoices(el){
         <td>${esc(r.sites?.site_name||'—')}</td>
         <td>${esc(mgr)}</td>
         <td>${r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '—'}</td>
-        <td>${timesheetBadge}${tsUpdated?`<div style="font-size:10.5px; color:var(--text-dim); margin-top:3px;">Updated ${tsUpdated}</div>`:''}</td>
+        <td>${timesheetBadge}${tsUpdated&&requiresTimesheet?`<div style="font-size:10.5px; color:var(--text-dim); margin-top:3px;">Updated ${tsUpdated}</div>`:''}</td>
         <td>${wcrBadge}${wcrUpdated&&requiresWcr?`<div style="font-size:10.5px; color:var(--text-dim); margin-top:3px;">Updated ${wcrUpdated}</div>`:''}</td>
         <td>${invBadge}${invUpdated?`<div style="font-size:10.5px; color:var(--text-dim); margin-top:3px;">Updated ${invUpdated}</div>`:''}</td>
         <td>${fmtDate(r.invoice_submission_date)}</td>
@@ -1749,26 +1770,32 @@ async function exportInvoiceReport(){
     const { data, error } = await sb.from('invoice_wcr_submissions').select(`
       billing_month, invoice_amount, invoice_status, invoice_submitted, invoice_submission_date, invoice_status_updated_at,
       wcr_status, wcr_submitted, wcr_status_updated_at, timesheet_status, timesheet_status_updated_at, remarks,
-      sites(site_name, projects(project_name, project_manager_id, requires_wcr, org_hierarchy(full_name)))
+      sites(site_name, projects(project_name, project_manager_id, submission_requirement, org_hierarchy(full_name)))
     `).order('billing_month', { ascending: false });
     if(error) throw error;
 
-    const rows = (data||[]).map(r=>({
-      'Project Name': r.sites?.projects?.project_name || '—',
-      'Site Name': r.sites?.site_name || '—',
-      'Manager Name': r.sites?.projects?.org_hierarchy?.full_name || 'Unassigned',
-      'Billing Month': r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '',
-      'Timesheet Status': r.timesheet_status || 'Not Submitted',
-      'Timesheet Status Updated': r.timesheet_status_updated_at ? new Date(r.timesheet_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
-      'WCR Required': r.sites?.projects?.requires_wcr ? 'Yes' : 'No',
-      'WCR Status': r.sites?.projects?.requires_wcr ? (r.wcr_status || (r.wcr_submitted ? 'Submitted to Coordinator' : 'Not Submitted')) : 'N/A',
-      'WCR Status Updated': r.sites?.projects?.requires_wcr ? (r.wcr_status_updated_at ? new Date(r.wcr_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : '',
-      'Invoice Status': r.invoice_status || (r.invoice_submitted ? 'Invoice received' : ''),
-      'Invoice Status Updated': r.invoice_status_updated_at ? new Date(r.invoice_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
-      'Invoice Date': r.invoice_submission_date ? fmtDate(r.invoice_submission_date) : '',
-      'Invoice Value': r.invoice_amount || '',
-      'Remarks': r.remarks || '',
-    }));
+    const rows = (data||[]).map(r=>{
+      const submissionReq = r.sites?.projects?.submission_requirement || 'timesheet_only';
+      const requiresTimesheet = submissionReq !== 'not_required';
+      const requiresWcr = submissionReq === 'timesheet_and_wcr';
+      return {
+        'Project Name': r.sites?.projects?.project_name || '—',
+        'Site Name': r.sites?.site_name || '—',
+        'Manager Name': r.sites?.projects?.org_hierarchy?.full_name || 'Unassigned',
+        'Billing Month': r.billing_month ? new Date(r.billing_month).toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '',
+        'Timesheet Required': requiresTimesheet ? 'Yes' : 'No',
+        'Timesheet Status': requiresTimesheet ? (r.timesheet_status || 'Not Submitted') : 'N/A',
+        'Timesheet Status Updated': requiresTimesheet ? (r.timesheet_status_updated_at ? new Date(r.timesheet_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : '',
+        'WCR Required': requiresWcr ? 'Yes' : 'No',
+        'WCR Status': requiresWcr ? (r.wcr_status || (r.wcr_submitted ? 'Submitted to Coordinator' : 'Not Submitted')) : 'N/A',
+        'WCR Status Updated': requiresWcr ? (r.wcr_status_updated_at ? new Date(r.wcr_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : '',
+        'Invoice Status': r.invoice_status || (r.invoice_submitted ? 'Invoice received' : ''),
+        'Invoice Status Updated': r.invoice_status_updated_at ? new Date(r.invoice_status_updated_at).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '',
+        'Invoice Date': r.invoice_submission_date ? fmtDate(r.invoice_submission_date) : '',
+        'Invoice Value': r.invoice_amount || '',
+        'Remarks': r.remarks || '',
+      };
+    });
 
     const wb = XLSX.utils.book_new();
     const sheet = XLSX.utils.json_to_sheet(rows);
@@ -4143,6 +4170,19 @@ function setMobileVoiceDetails(open){
 }
 mobileVoiceToggle.onclick=()=>setMobileVoiceDetails(voiceBox.dataset.mobileCollapsed==='true');
 document.getElementById('mobileVoiceClose').onclick=()=>setMobileVoiceDetails(false);
+(function(){
+  const box=document.getElementById('voiceBox');
+  const btn=document.getElementById('voiceMinimizeBtn');
+  function setMinimized(min){
+    box.dataset.minimized = min ? 'true' : 'false';
+    btn.textContent = min ? '▢' : '–';
+    btn.title = min ? 'Expand' : 'Minimize';
+    btn.setAttribute('aria-label', min ? 'Expand voice panel' : 'Minimize voice panel');
+  }
+  btn.onclick=(e)=>{ e.stopPropagation(); setMinimized(box.dataset.minimized !== 'true'); };
+  // While minimized, clicking anywhere else on the (now slim) panel also expands it again.
+  box.addEventListener('click', ()=>{ if(box.dataset.minimized === 'true') setMinimized(false); });
+})();
 if(window.visualViewport){
   const syncMobileViewport=()=>{
     const viewport=window.visualViewport;
