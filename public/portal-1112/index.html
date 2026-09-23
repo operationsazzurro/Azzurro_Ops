@@ -1755,8 +1755,13 @@ async function renderInvoices(el){
   document.getElementById('addBtn').onclick = ()=> openForm('Invoice / WCR Entry', invFields, async(values)=>{
     if(values.invoice_amount!=='') values.invoice_amount=Number(values.invoice_amount); else delete values.invoice_amount;
     if(values.invoice_status==='') values.invoice_status = null;
-    if(values.wcr_status==='') values.wcr_status = null;
-    if(values.timesheet_status==='') values.timesheet_status = null;
+    // "Not Required" is a display-only locked state, not a real workflow status the DB's
+    // check constraint knows about (it only allows Not Submitted / Submitted to Coordinator /
+    // Verified - Shared to Accounts) — store null instead. The table and reports already
+    // derive "Not required" independently from the project's submission_requirement, so
+    // nothing downstream needs this literal string persisted.
+    if(values.wcr_status==='' || values.wcr_status==='Not Required') values.wcr_status = null;
+    if(values.timesheet_status==='' || values.timesheet_status==='Not Required') values.timesheet_status = null;
     if(values.billing_month && values.billing_month.length===7) values.billing_month += '-01';
     if(values.invoice_submission_date==='') values.invoice_submission_date = null;
     const { error } = await sb.from('invoice_wcr_submissions').insert(values);
@@ -1768,8 +1773,8 @@ async function renderInvoices(el){
       openForm('Invoice / WCR Entry', invFields, async(values)=>{
         if(values.invoice_amount!=='') values.invoice_amount=Number(values.invoice_amount); else delete values.invoice_amount;
         if(values.invoice_status==='') values.invoice_status = null;
-        if(values.wcr_status==='') values.wcr_status = null;
-        if(values.timesheet_status==='') values.timesheet_status = null;
+        if(values.wcr_status==='' || values.wcr_status==='Not Required') values.wcr_status = null;
+        if(values.timesheet_status==='' || values.timesheet_status==='Not Required') values.timesheet_status = null;
         if(values.billing_month && values.billing_month.length===7) values.billing_month += '-01';
         if(values.invoice_submission_date==='') values.invoice_submission_date = null;
         const { error } = await sb.from('invoice_wcr_submissions').update(values).eq('id', row.id);
