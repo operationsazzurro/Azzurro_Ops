@@ -3037,27 +3037,58 @@ async function openForm(title, fields, onSave, existingValues){
   }).join('');
   document.getElementById('formModal').classList.add('show');
 
+  function lockStatusField(dataKey, hintId, locked, lockedValue, hintText){
+    const select = wrap.querySelector(`[data-k="${dataKey}"]`);
+    if(!select) return; // this form has no such field (KPI/Visits/Complaints/Followups) — nothing to do
+    select.disabled = locked;
+    let hint = wrap.querySelector('#'+hintId);
+    if(locked){
+      // "Not Required" isn't a real workflow status, so it isn't one of the select's normal
+      // options — inject it only while locked, rather than adding it to STATUS_OPTIONS where
+      // it would also show up (and be pickable) on sites that do require this submission.
+      let lockedOption = Array.from(select.options).find(o=>o.value===lockedValue);
+      if(!lockedOption){
+        lockedOption = document.createElement('option');
+        lockedOption.value = lockedValue;
+        lockedOption.textContent = lockedValue;
+        lockedOption.dataset.injectedLock = '1';
+        select.insertBefore(lockedOption, select.firstChild);
+      }
+      select.value = lockedValue;
+      if(!hint){
+        hint = document.createElement('p');
+        hint.id = hintId;
+        hint.className = 'hint';
+        hint.style.marginTop = '4px';
+        select.insertAdjacentElement('afterend', hint);
+      }
+      hint.textContent = hintText;
+    } else {
+      // Remove any "Not Required" option this function injected earlier, so switching to a
+      // site whose project DOES require this submission doesn't leave a stray extra choice.
+      const injected = select.querySelector('option[data-injected-lock="1"]');
+      if(injected) injected.remove();
+      if(hint) hint.remove();
+    }
+  }
+
   function syncTimesheetLock(siteId){
-    const tsSelect = wrap.querySelector('[data-k="timesheet_status"]');
-    if(!tsSelect) return; // this form has no Timesheet field (KPI/Visits/Complaints/Followups) — nothing to do
     const site = sitesForForm.find(s=>s.id===siteId);
     const requirement = site?.projects?.submission_requirement || 'timesheet_only';
     const notRequired = requirement === 'not_required';
-    tsSelect.disabled = notRequired;
-    let hint = wrap.querySelector('#ts_lockHint');
-    if(notRequired){
-      tsSelect.value = 'Not Submitted';
-      if(!hint){
-        hint = document.createElement('p');
-        hint.id = 'ts_lockHint';
-        hint.className = 'hint';
-        hint.style.marginTop = '4px';
-        tsSelect.insertAdjacentElement('afterend', hint);
-      }
-      hint.textContent = "This site's project has Submission Requirement set to \"Timesheet not required\" — Timesheet status is locked.";
-    } else if(hint){
-      hint.remove();
-    }
+    lockStatusField(
+      'timesheet_status', 'ts_lockHint', notRequired, 'Not Required',
+      "This site's project has Submission Requirement set to \"Timesheet not required\" — Timesheet status is locked."
+    );
+    // WCR follows the same "not required" lock, plus its own case: a project
+    // set to "Timesheet only" needs no WCR either, even though it does need a Timesheet.
+    const wcrNotRequired = requirement !== 'timesheet_and_wcr';
+    lockStatusField(
+      'wcr_status', 'wcr_lockHint', wcrNotRequired, 'Not Required',
+      notRequired
+        ? "This site's project has Submission Requirement set to \"Timesheet not required\" — WCR status is locked."
+        : "This site's project has Submission Requirement set to \"Timesheet only\" — WCR is not required, so WCR status is locked."
+    );
   }
 
   wrap.querySelectorAll('.field').forEach(fieldDiv=>{
