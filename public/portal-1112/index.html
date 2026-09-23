@@ -2266,12 +2266,18 @@ function openFeedbackForm(sites, editingRow){
         <div class="model-option ${s.id===hiddenInput.value?'selected':''}" data-site-id="${s.id}">${esc(s.site_name)}</div>
       `).join('');
       listEl.querySelectorAll('[data-site-id]').forEach(opt=>{
-        opt.onclick = ()=>{
+        // mousedown/touchstart + preventDefault, not click — see the note in
+        // openForm's site-search wiring for why click alone can lose the race
+        // against the input's blur-triggered hide.
+        const selectSite = ()=>{
           const site = sites.find(s=>s.id === opt.dataset.siteId);
+          if(!site) return;
           hiddenInput.value = site.id;
           searchInput.value = site.site_name;
           listEl.style.display = 'none';
         };
+        opt.addEventListener('mousedown', (e)=>{ e.preventDefault(); selectSite(); });
+        opt.addEventListener('touchstart', (e)=>{ e.preventDefault(); selectSite(); }, { passive:false });
       });
     }
     listEl.style.display = 'block';
@@ -3068,13 +3074,21 @@ async function openForm(title, fields, onSave, existingValues){
       } else {
         listEl.innerHTML = matches.slice(0,50).map(s=>`<div class="model-option ${s.id===hiddenInput.value?'selected':''}" data-site-id="${s.id}">${esc(s.site_name)}</div>`).join('');
         listEl.querySelectorAll('[data-site-id]').forEach(opt=>{
-          opt.onclick = ()=>{
+          // mousedown (not click) fires BEFORE the input's blur, and preventDefault stops
+          // the browser from shifting focus at all — this avoids the race where blur's
+          // timer hides the list a moment before the click handler would have run,
+          // which is what made a selection appear not to "stick". touchstart covers
+          // the same race on mobile/touch browsers.
+          const selectSite = ()=>{
             const site = sitesForForm.find(s=>s.id===opt.dataset.siteId);
+            if(!site) return;
             hiddenInput.value = site.id;
             searchInput.value = site.site_name;
             listEl.style.display = 'none';
             syncTimesheetLock(site.id);
           };
+          opt.addEventListener('mousedown', (e)=>{ e.preventDefault(); selectSite(); });
+          opt.addEventListener('touchstart', (e)=>{ e.preventDefault(); selectSite(); }, { passive:false });
         });
       }
       listEl.style.display = 'block';
