@@ -1362,6 +1362,7 @@ async function renderContracts(el){
   el.innerHTML = `<div class="panel"><div class="toolbar">
     <div class="panel-title" style="margin:0;">Projects & Contracts (${rows.length})</div>
     <div style="display:flex; gap:8px;">
+      <input class="search-box" id="tblSearch" placeholder="Search...">
       <button class="btn" id="manageManagersBtn">👤 Managers & Submission Requirements</button>
       ${writeOk ? `<button class="btn" id="importBtn">⬆ Import CSV</button>
       <button class="btn btn-primary" id="addBtn">+ Add Contract</button>` : ''}
@@ -1376,6 +1377,12 @@ async function renderContracts(el){
     }).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?8:7}">No contracts yet.</td></tr>`}</tbody></table></div></div>`;
   document.getElementById('manageManagersBtn').onclick = openProjectManagersPanel;
+  document.getElementById('tblSearch').oninput = (e)=>{
+    const q = e.target.value.toLowerCase();
+    el.querySelectorAll('table tbody tr').forEach(tr=>{
+      tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
   if(!writeOk) return;
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
@@ -1513,13 +1520,20 @@ async function renderSites(el){
   const rows = data||[];
   const writeOk = canWrite();
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Sites (${rows.length})</div>
-    ${writeOk ? `<div style="display:flex; gap:8px;">
-      <button class="btn" id="importBtn">⬆ Import CSV</button>
-      <button class="btn btn-primary" id="addBtn">+ Add Site</button>
-    </div>` : ''}</div>
+    <div style="display:flex; gap:8px;">
+      <input class="search-box" id="tblSearch" placeholder="Search...">
+      ${writeOk ? `<button class="btn" id="importBtn">⬆ Import CSV</button>
+      <button class="btn btn-primary" id="addBtn">+ Add Site</button>` : ''}
+    </div></div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Code</th><th>Project</th><th>City</th><th>Type</th><th>Manpower Req.</th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.site_name)}</td><td>${esc(r.site_code)||'—'}</td><td>${esc(r.projects?.project_name||'—')}</td><td>${esc(r.city)}</td><td>${esc(r.site_type)}</td><td>${r.manpower_required??0}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="${esc(r.site_name)}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?7:6}">No sites yet.</td></tr>`}</tbody></table></div></div>`;
+  document.getElementById('tblSearch').oninput = (e)=>{
+    const q = e.target.value.toLowerCase();
+    el.querySelectorAll('table tbody tr').forEach(tr=>{
+      tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
   if(!writeOk) return;
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
@@ -1668,6 +1682,7 @@ async function renderInvoices(el){
   const writeOk = canWrite();
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Invoice & WCR Submissions (${rows.length})</div>
     <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <input class="search-box" id="tblSearch" placeholder="Search...">
       <button class="btn" id="exportInvoiceBtn">⬇ Export Excel</button>
       ${writeOk?'<button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Entry</button>':''}
     </div></div>
@@ -1723,6 +1738,12 @@ async function renderInvoices(el){
     {k:'invoice_status',l:'Invoice Status',type:'select',options:INVOICE_STATUS_OPTIONS},
     {k:'remarks',l:'Remarks'}
   ];
+  document.getElementById('tblSearch').oninput = (e)=>{
+    const q = e.target.value.toLowerCase();
+    el.querySelectorAll('table tbody tr').forEach(tr=>{
+      tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
   document.getElementById('exportInvoiceBtn').onclick = exportInvoiceReport;
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
@@ -1815,13 +1836,22 @@ async function renderKPI(el){
   const rows = data||[];
   const writeOk = canWrite();
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">KPI Updates (${rows.length})</div>
-    ${writeOk?'<div style="display:flex; gap:8px;"><button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add KPI Update</button></div>':''}</div>
+    <div style="display:flex; gap:8px;">
+      <input class="search-box" id="tblSearch" placeholder="Search...">
+      ${writeOk?'<button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add KPI Update</button>':''}
+    </div></div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Month</th><th>Score</th><th>Remarks</th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.review_month)}</td><td>${r.kpi_score??'—'}</td><td>${esc(r.remarks)}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="KPI entry for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?5:4}">No KPI records yet.</td></tr>`}</tbody></table></div></div>`;
   const kpiFields = [
     {k:'site_id',l:'Site',type:'site-search'},{k:'review_month',l:'Review month',type:'date'},{k:'kpi_score',l:'Score (0-100)',type:'number'},{k:'remarks',l:'Remarks'}
   ];
+  document.getElementById('tblSearch').oninput = (e)=>{
+    const q = e.target.value.toLowerCase();
+    el.querySelectorAll('table tbody tr').forEach(tr=>{
+      tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
       btn.onclick = ()=> deleteRecord('kpi_updates', btn.dataset.deleteId, btn.dataset.deleteLabel);
@@ -1852,10 +1882,19 @@ async function renderVisits(el){
   const rows = data||[];
   const writeOk = canWrite();
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Manager Site Visits (${rows.length})</div>
-    ${writeOk?'<div style="display:flex; gap:8px;"><button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Schedule Visit</button></div>':''}</div>
+    <div style="display:flex; gap:8px;">
+      <input class="search-box" id="tblSearch" placeholder="Search...">
+      ${writeOk?'<button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Schedule Visit</button>':''}
+    </div></div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Scheduled</th><th>Actual</th><th>Status</th><th>Notes</th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.scheduled_date)}</td><td>${fmtDate(r.actual_visit_date)}</td><td><span class="badge ${r.status==='completed'?'done':r.status==='missed'?'open':'progress'}">${r.status}</span></td><td>${esc(r.visit_notes)}</td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="visit for ${esc(r.sites?.site_name||'this site')}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?6:5}">No visits scheduled yet.</td></tr>`}</tbody></table></div></div>`;
+  document.getElementById('tblSearch').oninput = (e)=>{
+    const q = e.target.value.toLowerCase();
+    el.querySelectorAll('table tbody tr').forEach(tr=>{
+      tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
       btn.onclick = ()=> deleteRecord('manager_site_visits', btn.dataset.deleteId, btn.dataset.deleteLabel);
@@ -1888,10 +1927,19 @@ async function renderComplaints(el){
   const rows = data||[];
   const writeOk = canWrite();
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Client Complaints (${rows.length})</div>
-    ${writeOk?'<div style="display:flex; gap:8px;"><button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Log Complaint</button></div>':''}</div>
+    <div style="display:flex; gap:8px;">
+      <input class="search-box" id="tblSearch" placeholder="Search...">
+      ${writeOk?'<button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Log Complaint</button>':''}
+    </div></div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Date</th><th>Category</th><th>Severity</th><th>Status</th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${fmtDate(r.date_raised)}</td><td>${esc(r.category)}</td><td>${esc(r.severity)}</td><td><span class="badge ${r.status==='resolved'||r.status==='closed'?'done':r.status==='in_progress'?'progress':'open'}">${r.status}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="this complaint" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?6:5}">No complaints logged.</td></tr>`}</tbody></table></div></div>`;
+  document.getElementById('tblSearch').oninput = (e)=>{
+    const q = e.target.value.toLowerCase();
+    el.querySelectorAll('table tbody tr').forEach(tr=>{
+      tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
       btn.onclick = ()=> deleteRecord('client_complaints', btn.dataset.deleteId, btn.dataset.deleteLabel);
@@ -1926,10 +1974,19 @@ async function renderFollowups(el){
   const rows = data||[];
   const writeOk = canWrite();
   el.innerHTML = `<div class="panel"><div class="toolbar"><div class="panel-title" style="margin:0;">Client Follow-ups (${rows.length})</div>
-    ${writeOk?'<div style="display:flex; gap:8px;"><button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Follow-up</button></div>':''}</div>
+    <div style="display:flex; gap:8px;">
+      <input class="search-box" id="tblSearch" placeholder="Search...">
+      ${writeOk?'<button class="btn" id="importBtn">⬆ Import CSV</button><button class="btn btn-primary" id="addBtn">+ Add Follow-up</button>':''}
+    </div></div>
     <div style="overflow-x:auto;"><table><thead><tr><th>Site</th><th>Contact</th><th>Follow-up Date</th><th>Next Action</th><th>Status</th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>`<tr><td>${esc(r.sites?.site_name||'—')}</td><td>${esc(r.client_contact_name)}</td><td>${fmtDate(r.followup_date)}</td><td>${fmtDate(r.next_action_date)}</td><td><span class="badge ${r.status==='done'?'done':'open'}">${r.status}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="this follow-up" title="Delete">🗑</button>`:''}</td>`:''}</tr>`).join('')
       : `<tr class="empty-row"><td colspan="${writeOk?6:5}">No follow-ups logged.</td></tr>`}</tbody></table></div></div>`;
+  document.getElementById('tblSearch').oninput = (e)=>{
+    const q = e.target.value.toLowerCase();
+    el.querySelectorAll('table tbody tr').forEach(tr=>{
+      tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
   if(isAdmin()){
     el.querySelectorAll('[data-delete-id]').forEach(btn=>{
       btn.onclick = ()=> deleteRecord('client_followups', btn.dataset.deleteId, btn.dataset.deleteLabel);
@@ -2067,6 +2124,7 @@ async function renderFeedback(el){
   el.innerHTML = `<div class="panel"><div class="toolbar">
     <div class="panel-title" style="margin:0;">Customer Feedback (${rows.length})</div>
     <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <input class="search-box" id="tblSearch" placeholder="Search...">
       <button class="btn" id="exportFeedbackBtn">⬇ Export Excel Report</button>
       ${writeOk ? `<button class="btn" id="linkBtn">🔗 Generate Feedback Link</button>
       <button class="btn btn-primary" id="addFeedbackBtn">+ Add Feedback</button>` : ''}
@@ -2088,6 +2146,13 @@ async function renderFeedback(el){
   el.querySelectorAll('[data-view-idx]').forEach(btn=>{
     btn.onclick = ()=> viewFeedbackDetail(rows[Number(btn.dataset.viewIdx)]);
   });
+
+  document.getElementById('tblSearch').oninput = (e)=>{
+    const q = e.target.value.toLowerCase();
+    el.querySelectorAll('table tbody tr').forEach(tr=>{
+      tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
 
   document.getElementById('exportFeedbackBtn').onclick = exportFeedbackReport;
 
@@ -2487,20 +2552,23 @@ function openTodoSettingsForm(){
     <div class="field"><label>CC on all reminder emails (optional)</label><input id="ts_ccEmail" type="text" placeholder="e.g. ops-oversight@company.com" value="Loading…" disabled></div>
     <p class="hint">Applies to every reminder email sent from this app — personal task digests, manager-assigned task reminders, and site Timesheet/WCR reminders. Leave blank for no CC.</p>
 
+    <div class="field"><label>Timesheet Coordinator email</label><input id="ts_coordinatorEmail" type="text" placeholder="e.g. coordinator@company.com" value="Loading…" disabled></div>
+    <p class="hint">All sites route here once their Timesheet status is "Submitted to Coordinator" — one coordinator address covers every site, no per-project assignment needed. Sites still "Not Submitted" continue reminding the site's own manager, as before.</p>
+
     <div style="border-top:1px solid var(--panel-border); margin:16px 0 12px; padding-top:12px;">
       <div class="field">
         <label><input type="checkbox" id="ts_wcrEnabled" style="width:auto; margin-right:8px;" disabled>Enable site Timesheet/WCR pending reminders</label>
       </div>
       <div class="field"><label>Send these reminders to</label>
         <select id="ts_wcrMode" disabled>
-          <option value="managers">Concerned Site Managers (normal)</option>
+          <option value="managers">Concerned Site Managers / Coordinator (normal)</option>
           <option value="test">A specific address (testing)</option>
         </select>
       </div>
       <div class="field" id="ts_wcrTestEmailField" style="display:none;">
         <label>Test address</label>
         <input id="ts_wcrTestEmail" type="text" placeholder="you@company.com" disabled>
-        <p class="hint" style="margin-top:4px;">While in test mode, every Site Manager's reminder email is redirected here instead — content stays the same (one email per manager, listing their pending sites), just the recipient changes, so you can verify it without notifying real managers.</p>
+        <p class="hint" style="margin-top:4px;">While in test mode, every reminder email (both manager and coordinator) is redirected here instead — content stays the same, just the recipient changes, so you can verify it without notifying real people.</p>
       </div>
     </div>
     ` : ''}
@@ -2511,7 +2579,7 @@ function openTodoSettingsForm(){
 
   if(isAdmin()){
     sb.from('app_settings').select('key, value').in('key', [
-      'reminder_cc_email', 'wcr_reminders_enabled', 'wcr_reminder_mode', 'wcr_reminder_test_email'
+      'reminder_cc_email', 'wcr_reminders_enabled', 'wcr_reminder_mode', 'wcr_reminder_test_email', 'timesheet_coordinator_email'
     ]).then(({data})=>{
       const byKey = {};
       (data||[]).forEach(row=> byKey[row.key] = row.value);
@@ -2519,6 +2587,10 @@ function openTodoSettingsForm(){
       const ccInput = document.getElementById('ts_ccEmail');
       ccInput.value = byKey.reminder_cc_email || '';
       ccInput.disabled = false;
+
+      const coordinatorInput = document.getElementById('ts_coordinatorEmail');
+      coordinatorInput.value = byKey.timesheet_coordinator_email || '';
+      coordinatorInput.disabled = false;
 
       const wcrEnabled = byKey.wcr_reminders_enabled !== 'false'; // defaults to enabled
       const wcrMode = byKey.wcr_reminder_mode || 'managers';
@@ -2550,13 +2622,14 @@ function openTodoSettingsForm(){
       const wcrTestEmail = document.getElementById('ts_wcrTestEmail').value.trim();
       if(wcrMode === 'test' && !wcrTestEmail){
         saveBtn.disabled = false; saveBtn.textContent = 'Save';
-        errEl.textContent = 'Please enter a test address, or switch back to "Concerned Site Managers".';
+        errEl.textContent = 'Please enter a test address, or switch back to "Concerned Site Managers / Coordinator".';
         return;
       }
 
       const now = new Date().toISOString();
       const settingsToSave = [
         { key: 'reminder_cc_email', value: document.getElementById('ts_ccEmail').value.trim() || null, updated_at: now },
+        { key: 'timesheet_coordinator_email', value: document.getElementById('ts_coordinatorEmail').value.trim() || null, updated_at: now },
         { key: 'wcr_reminders_enabled', value: String(document.getElementById('ts_wcrEnabled').checked), updated_at: now },
         { key: 'wcr_reminder_mode', value: wcrMode, updated_at: now },
         { key: 'wcr_reminder_test_email', value: wcrTestEmail || null, updated_at: now },
@@ -2905,7 +2978,7 @@ function openBulkImport(table, fields, title, reference){
 let sitesCacheForForms = null;
 async function getSitesForForms(){
   if(sitesCacheForForms) return sitesCacheForForms;
-  const { data } = await sb.from('sites').select('id, site_name').order('site_name');
+  const { data } = await sb.from('sites').select('id, site_name, projects(submission_requirement)').order('site_name');
   sitesCacheForForms = data || [];
   return sitesCacheForForms;
 }
@@ -2958,6 +3031,29 @@ async function openForm(title, fields, onSave, existingValues){
   }).join('');
   document.getElementById('formModal').classList.add('show');
 
+  function syncTimesheetLock(siteId){
+    const tsSelect = wrap.querySelector('[data-k="timesheet_status"]');
+    if(!tsSelect) return; // this form has no Timesheet field (KPI/Visits/Complaints/Followups) — nothing to do
+    const site = sitesForForm.find(s=>s.id===siteId);
+    const requirement = site?.projects?.submission_requirement || 'timesheet_only';
+    const notRequired = requirement === 'not_required';
+    tsSelect.disabled = notRequired;
+    let hint = wrap.querySelector('#ts_lockHint');
+    if(notRequired){
+      tsSelect.value = 'Not Submitted';
+      if(!hint){
+        hint = document.createElement('p');
+        hint.id = 'ts_lockHint';
+        hint.className = 'hint';
+        hint.style.marginTop = '4px';
+        tsSelect.insertAdjacentElement('afterend', hint);
+      }
+      hint.textContent = "This site's project has Submission Requirement set to \"Timesheet not required\" — Timesheet status is locked.";
+    } else if(hint){
+      hint.remove();
+    }
+  }
+
   wrap.querySelectorAll('.field').forEach(fieldDiv=>{
     const searchInput = fieldDiv.querySelector('.site-search-input');
     if(!searchInput) return;
@@ -2977,6 +3073,7 @@ async function openForm(title, fields, onSave, existingValues){
             hiddenInput.value = site.id;
             searchInput.value = site.site_name;
             listEl.style.display = 'none';
+            syncTimesheetLock(site.id);
           };
         });
       }
@@ -2985,6 +3082,10 @@ async function openForm(title, fields, onSave, existingValues){
     searchInput.oninput = (e)=>{ hiddenInput.value = ''; renderOptions(e.target.value); };
     searchInput.onfocus = ()=> renderOptions(searchInput.value);
     searchInput.addEventListener('blur', ()=> setTimeout(()=>{ listEl.style.display='none'; }, 150));
+
+    // Editing an existing entry (or a form with a pre-filled site) starts with a site
+    // already selected — lock the dropdown immediately rather than waiting for a click.
+    if(hiddenInput.value) syncTimesheetLock(hiddenInput.value);
   });
 
   document.getElementById('saveForm').onclick = async ()=>{
