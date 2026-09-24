@@ -2236,6 +2236,7 @@ function openFeedbackForm(sites, editingRow){
       <div id="fb_siteList" class="model-list" style="display:none; position:absolute; z-index:10; width:100%; background:var(--bg-1); margin-top:4px;"></div>
     </div>
     <div class="field"><label>Reporting month</label><input id="fb_period" type="month" value="${periodVal}"></div>
+    <div id="fb_dupAlert" role="alert" style="display:none; margin:-4px 0 14px; padding:10px 12px; border:1px solid rgba(255,107,129,0.5); background:rgba(255,107,129,0.10); color:var(--red); border-radius:8px; font-size:12.5px; line-height:1.5;"></div>
     <div class="field"><label>Client name</label><input id="fb_client" type="text" value="${editingRow&&editingRow.client_name?esc(editingRow.client_name):''}"></div>
     <div class="field"><label>Designation</label><input id="fb_designation" type="text" value="${editingRow&&editingRow.designation?esc(editingRow.designation):''}"></div>
     <div class="field"><label>Date received</label><input id="fb_date" type="date" value="${editingRow&&editingRow.feedback_date?editingRow.feedback_date:''}"></div>
@@ -2280,6 +2281,7 @@ function openFeedbackForm(sites, editingRow){
           hiddenInput.value = site.id;
           searchInput.value = site.site_name;
           listEl.style.display = 'none';
+          checkDuplicate();
         };
         opt.addEventListener('mousedown', (e)=>{ e.preventDefault(); selectSite(); });
         opt.addEventListener('touchstart', (e)=>{ e.preventDefault(); selectSite(); }, { passive:false });
@@ -2290,6 +2292,7 @@ function openFeedbackForm(sites, editingRow){
 
   searchInput.oninput = (e)=>{
     hiddenInput.value = ''; // typing invalidates any prior selection until a match is clicked
+    checkDuplicate(); // clears the alert, since no site is selected now
     renderSiteOptions(e.target.value);
   };
   searchInput.onfocus = ()=> renderSiteOptions(searchInput.value);
@@ -2298,6 +2301,39 @@ function openFeedbackForm(sites, editingRow){
     setTimeout(()=>{ listEl.style.display = 'none'; }, 150);
   });
 
+  // ---- duplicate check: one feedback per site per month ----
+  const dupAlertEl = document.getElementById('fb_dupAlert');
+  let dupCheckSeq = 0;
+  // Resolves to true (already exists), false (free), or null (could not verify).
+  async function checkDuplicate(){
+    const seq = ++dupCheckSeq;
+    dupAlertEl.style.display = 'none';
+    const siteId = hiddenInput.value;
+    const periodInput = document.getElementById('fb_period').value; // "YYYY-MM"
+    if(!siteId || !periodInput) return false;
+    const start = periodInput + '-01';
+    const [y, m] = periodInput.split('-').map(Number);
+    const next = m === 12 ? `${y+1}-01-01` : `${y}-${String(m+1).padStart(2,'0')}-01`;
+    let q = sb.from('customer_feedback').select('id, client_name, submitted_via')
+      .eq('site_id', siteId).gte('reporting_period', start).lt('reporting_period', next);
+    if(editingRow) q = q.neq('id', editingRow.id);
+    const { data, error } = await q;
+    if(seq !== dupCheckSeq) return false; // a newer check superseded this one
+    if(error) return null;
+    if(!data || !data.length) return false;
+    const siteName = sites.find(s=>s.id===siteId)?.site_name || 'this site';
+    const monthLabel = new Date(start).toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+    const first = data[0];
+    const who = first.client_name ? ` by ${first.client_name}` : '';
+    const via = first.submitted_via ? ` (${first.submitted_via})` : '';
+    dupAlertEl.textContent = `Feedback for ${siteName} for ${monthLabel} has already been recorded${who}${via}. A second entry cannot be saved. Pick a different month or edit the existing record.`;
+    dupAlertEl.style.display = 'block';
+    return true;
+  }
+  document.getElementById('fb_period').addEventListener('change', checkDuplicate);
+  document.getElementById('fb_period').addEventListener('input', checkDuplicate);
+  checkDuplicate();
+
   document.getElementById('saveForm').onclick = async ()=>{
     const siteId = document.getElementById('fb_site').value;
     const periodInput = document.getElementById('fb_period').value; // "YYYY-MM"
@@ -2305,16 +2341,10 @@ function openFeedbackForm(sites, editingRow){
     if(!periodInput){ alert('Please select the reporting month.'); return; }
     const reportingPeriod = periodInput + '-01';
 
-    // Warn before saving a second entry for the same site + month
-    let dupQuery = sb.from('customer_feedback').select('id').eq('site_id', siteId).eq('reporting_period', reportingPeriod);
-    if(editingRow) dupQuery = dupQuery.neq('id', editingRow.id);
-    const { data: dupes, error: dupErr } = await dupQuery;
-    if(!dupErr && dupes && dupes.length){
-      const siteName = sites.find(s=>s.id===siteId)?.site_name || 'this site';
-      const monthLabel = new Date(reportingPeriod).toLocaleDateString('en-GB',{month:'long',year:'numeric'});
-      const proceed = window.confirm(`Feedback for ${siteName} in ${monthLabel} has already been recorded (${dupes.length} entr${dupes.length>1?'ies':'y'} found). Save this one anyway?`);
-      if(!proceed) return;
-    }
+    // Block the save when this site already has feedback for the month
+    const dup = await checkDuplicate();
+    if(dup === null){ alert('Could not verify whether feedback already exists for this site and month. Please try again.'); return; }
+    if(dup){ alert(dupAlertEl.textContent); return; }
 
     const header = {
       site_id: siteId,
