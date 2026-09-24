@@ -4370,6 +4370,43 @@ if(window.visualViewport){
   };
   window.visualViewport.addEventListener('resize',syncMobileViewport);syncMobileViewport();
 }
+// ---------- 4-digit year enforcement for every date / month field ----------
+(function(){
+  const YEAR_MIN = 2000, YEAR_MAX = 2099;
+  const isDateField = el => el && el.tagName === 'INPUT' && (el.type === 'date' || el.type === 'month');
+  const yearOf = v => (v || '').split('-')[0];
+
+  // Give every date/month input (including ones created later by forms) a valid range.
+  function applyLimits(root){
+    (root || document).querySelectorAll('input[type="date"]:not([data-yr]), input[type="month"]:not([data-yr])').forEach(el=>{
+      el.dataset.yr = '1';
+      el.min = el.type === 'date' ? YEAR_MIN + '-01-01' : YEAR_MIN + '-01';
+      el.max = el.type === 'date' ? YEAR_MAX + '-12-31' : YEAR_MAX + '-12';
+    });
+  }
+  applyLimits();
+  new MutationObserver(()=> applyLimits()).observe(document.body, { childList:true, subtree:true });
+
+  // Browsers let you keep typing digits into the year (e.g. 275760). Cut it back to 4.
+  document.addEventListener('input', e=>{
+    const el = e.target;
+    if(!isDateField(el) || !el.value) return;
+    const y = yearOf(el.value);
+    if(y.length > 4) el.value = y.slice(0,4) + el.value.slice(y.length);
+  }, true);
+
+  // When leaving the field, reject years outside the allowed range.
+  document.addEventListener('focusout', e=>{
+    const el = e.target;
+    if(!isDateField(el) || !el.value) return;
+    const y = Number(yearOf(el.value));
+    if(y < YEAR_MIN || y > YEAR_MAX){
+      el.value = '';
+      showTodoToast(`Please enter a valid 4-digit year (${YEAR_MIN}-${YEAR_MAX}).`);
+    }
+  }, true);
+})();
+
 // ---------- boot ----------
 if(createSupabaseClient()){
   sb.auth.onAuthStateChange((event)=>{
