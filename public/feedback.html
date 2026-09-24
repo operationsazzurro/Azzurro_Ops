@@ -135,7 +135,7 @@ function renderForm(sb, siteLabel){
     </p>
     <div class="field"><label>Client Name</label><input id="pf_client" type="text" maxlength="200"></div>
     <div class="field"><label>Designation</label><input id="pf_designation" type="text" maxlength="200"></div>
-    <div class="field"><label>Reporting Month</label><input id="pf_period" type="month" value="${new Date().toISOString().slice(0,7)}"></div>
+    <div class="field"><label>Reporting Month</label><input id="pf_period" type="month" min="2000-01" max="2099-12" value="${new Date().toISOString().slice(0,7)}"></div>
     <div id="pf_dupAlert" class="dup-alert" role="alert"></div>
     <div style="margin-top:10px;">
       ${FEEDBACK_AREAS.map((area,i)=>`
@@ -223,6 +223,24 @@ function renderForm(sb, siteLabel){
     }
   };
 }
+
+// Keep the month picker to a 4-digit year (2000-2099)
+document.addEventListener('input', e=>{
+  const el = e.target;
+  if(el.tagName !== 'INPUT' || el.type !== 'month' || !el.value) return;
+  const y = el.value.split('-')[0];
+  if(y.length > 4) el.value = y.slice(0,4) + el.value.slice(y.length);
+}, true);
+document.addEventListener('focusout', e=>{
+  const el = e.target;
+  if(el.tagName !== 'INPUT' || el.type !== 'month' || !el.value) return;
+  const y = Number(el.value.split('-')[0]);
+  if(y < 2000 || y > 2099){
+    el.value = '';
+    const err = document.getElementById('pf_error');
+    if(err) err.textContent = 'Please enter a valid 4-digit year (2000-2099).';
+  }
+}, true);
 
 resolveAndRender();
 </script>
