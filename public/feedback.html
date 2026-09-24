@@ -59,6 +59,7 @@
   .thankyou{ text-align:center; padding:30px 10px; }
   .thankyou .big-check{ font-size:40px; color:var(--cyan-bright); margin-bottom:10px; }
   .error{ color:var(--red); font-size:12px; min-height:16px; margin-top:6px; }
+  .dup-alert{ display:none; margin:-4px 0 14px; padding:10px 12px; border:1px solid rgba(255,107,129,0.5); background:rgba(255,107,129,0.10); color:var(--red); border-radius:8px; font-size:12.5px; line-height:1.5; }
   .msg{ text-align:center; color:var(--text-mid); font-size:13px; padding:20px 0; }
 </style>
 </head>
@@ -135,6 +136,7 @@ function renderForm(sb, siteLabel){
     <div class="field"><label>Client Name</label><input id="pf_client" type="text" maxlength="200"></div>
     <div class="field"><label>Designation</label><input id="pf_designation" type="text" maxlength="200"></div>
     <div class="field"><label>Reporting Month</label><input id="pf_period" type="month" value="${new Date().toISOString().slice(0,7)}"></div>
+    <div id="pf_dupAlert" class="dup-alert" role="alert"></div>
     <div style="margin-top:10px;">
       ${FEEDBACK_AREAS.map((area,i)=>`
         <div class="pf-area-row">
@@ -151,9 +153,36 @@ function renderForm(sb, siteLabel){
     <button class="btn-primary" id="pf_submit">Submit Feedback</button>
   `;
 
+  // ---- already-submitted check: one feedback per site per month ----
+  const dupAlertEl = document.getElementById('pf_dupAlert');
+  const submitEl = document.getElementById('pf_submit');
+  let dupSeq = 0, alreadyExists = false, submitting = false;
+  function showDuplicate(){
+    alreadyExists = true;
+    dupAlertEl.textContent = 'Feedback for this site has already been submitted for the selected month, so it cannot be submitted again. Please choose a different month, or contact us if you need to make a correction.';
+    dupAlertEl.style.display = 'block';
+    submitEl.disabled = true;
+  }
+  async function checkExisting(){
+    const my = ++dupSeq;
+    const period = document.getElementById('pf_period').value;
+    alreadyExists = false;
+    dupAlertEl.style.display = 'none';
+    if(!submitting) submitEl.disabled = false;
+    if(!period) return;
+    const { data, error } = await sb.rpc('feedback_exists', { p_code: shortCode, p_period: period + '-01' });
+    if(my !== dupSeq) return; // a newer check superseded this one
+    // If the check itself fails, stay open: the server re-checks on submit anyway.
+    if(!error && data === true) showDuplicate();
+  }
+  document.getElementById('pf_period').addEventListener('change', checkExisting);
+  document.getElementById('pf_period').addEventListener('input', checkExisting);
+  checkExisting();
+
   document.getElementById('pf_submit').onclick = async ()=>{
     const errEl = document.getElementById('pf_error');
     errEl.textContent = '';
+    if(alreadyExists){ return; }
     const period = document.getElementById('pf_period').value;
     if(!period){ errEl.textContent = 'Please select the reporting month.'; return; }
     const ratings = FEEDBACK_AREAS.map((area,i)=>{
@@ -164,7 +193,7 @@ function renderForm(sb, siteLabel){
     if(ratings.some(r=>!r.rating)){ errEl.textContent = 'Please provide a rating for every area.'; return; }
 
     const submitBtn = document.getElementById('pf_submit');
-    submitBtn.disabled = true; submitBtn.textContent = 'Submitting…';
+    submitting = true; submitBtn.disabled = true; submitBtn.textContent = 'Submitting…';
     try{
       // One server-side call writes the feedback and all ratings together,
       // so a failure can never leave a feedback record without its ratings.
@@ -184,8 +213,10 @@ function renderForm(sb, siteLabel){
         <p style="color:var(--text-mid); font-size:13px;">Your response has been recorded.</p>
       </div>`;
     }catch(e){
+      submitting = false;
       submitBtn.disabled = false; submitBtn.textContent = 'Submit Feedback';
       const msg = String(e.message || e);
+      if(/duplicate feedback/i.test(msg)){ showDuplicate(); return; }
       errEl.textContent = /invalid link/i.test(msg)
         ? 'This feedback link is no longer valid. Please contact us for a new one.'
         : 'Could not submit: ' + msg;
