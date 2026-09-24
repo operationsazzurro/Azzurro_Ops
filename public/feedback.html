@@ -71,7 +71,7 @@
   <div class="panel">
     <div style="text-align:center; margin-bottom:6px;">
       <div class="brand-mark">OC</div>
-      <h1 style="font-family:'Space Grotesk',sans-serif; font-size:18px; letter-spacing:0.03em; margin:0;">Customer Satisfaction Feedback</h1>
+      <h1 style="font-family:'Space Grotesk',sans-serif; font-size:18px; letter-spacing:0.03em; margin:0;">Customer Feedback</h1>
       <div id="siteLabel" class="site-banner" style="display:none;"></div>
     </div>
     <div id="formBody"></div>
@@ -132,7 +132,7 @@ async function resolveAndRender(){
 function renderForm(sb, siteLabel){
   const banner = document.getElementById('siteLabel');
   if(siteLabel){
-    banner.innerHTML = `<span class="site-tag">Feedback for Site</span><span class="site-name">${esc(siteLabel)}</span>`;
+    banner.innerHTML = `<span class="site-tag">SITE</span><span class="site-name">${esc(siteLabel)}</span>`;
     banner.style.display = 'block';
   }else{
     banner.style.display = 'none';
