@@ -2314,7 +2314,7 @@ function openFeedbackForm(sites, editingRow){
     const start = periodInput + '-01';
     const [y, m] = periodInput.split('-').map(Number);
     const next = m === 12 ? `${y+1}-01-01` : `${y}-${String(m+1).padStart(2,'0')}-01`;
-    let q = sb.from('customer_feedback').select('id, client_name, submitted_via')
+    let q = sb.from('customer_feedback').select('id')
       .eq('site_id', siteId).gte('reporting_period', start).lt('reporting_period', next);
     if(editingRow) q = q.neq('id', editingRow.id);
     const { data, error } = await q;
@@ -2323,10 +2323,7 @@ function openFeedbackForm(sites, editingRow){
     if(!data || !data.length) return false;
     const siteName = sites.find(s=>s.id===siteId)?.site_name || 'this site';
     const monthLabel = new Date(start).toLocaleDateString('en-GB',{month:'long',year:'numeric'});
-    const first = data[0];
-    const who = first.client_name ? ` by ${first.client_name}` : '';
-    const via = first.submitted_via ? ` (${first.submitted_via})` : '';
-    dupAlertEl.textContent = `Feedback for ${siteName} for ${monthLabel} has already been recorded${who}${via}. A second entry cannot be saved. Pick a different month or edit the existing record.`;
+    dupAlertEl.textContent = `Feedback already recorded for the Site: ${siteName} for Period: ${monthLabel}. A second entry cannot be saved. Pick a different month or edit the existing record.`;
     dupAlertEl.style.display = 'block';
     return true;
   }
