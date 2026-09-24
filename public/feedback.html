@@ -54,11 +54,12 @@
     display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-mid);
     border:1px solid var(--panel-border); border-radius:8px; padding:6px 11px; cursor:pointer; transition:.15s;
   }
-  .pf-rating-options input[type="radio"]{ accent-color: var(--cyan); }
+  .pf-rating-options input[type="radio"]{ accent-color: var(--cyan); width:auto; }
   .pf-rating-options label:has(input:checked){ border-color:var(--cyan); color:var(--cyan-bright); background:rgba(94,234,212,0.08); }
   .thankyou{ text-align:center; padding:30px 10px; }
   .thankyou .big-check{ font-size:40px; color:var(--cyan-bright); margin-bottom:10px; }
   .error{ color:var(--red); font-size:12px; min-height:16px; margin-top:6px; }
+  .msg{ text-align:center; color:var(--text-mid); font-size:13px; padding:20px 0; }
 </style>
 </head>
 <body>
@@ -88,55 +89,51 @@ const FEEDBACK_AREAS = [
 ];
 const RATING_OPTIONS = ['Excellent','Very Good','Good','Fair'];
 
-function esc(s){ return (s===null||s===undefined) ? '' : String(s).replace(/</g,'&lt;'); }
-
-const params = new URLSearchParams(window.location.search);
-const shortCode = params.get('c');
-let siteId = params.get('site');       // legacy format, still supported
-let siteLabel = params.get('label');   // legacy format, still supported
-
-const body = document.getElementById('formBody');
-
-async function resolveAndRender(){
-  const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth:{ persistSession:false } }) : null;
-
-  if(shortCode){
-    if(!sb){
-      body.innerHTML = `<p style="text-align:center; color:var(--text-mid); font-size:13px; padding:20px 0;">Could not connect. Please reload the page and try again.</p>`;
-      return;
-    }
-    const { data, error } = await sb.from('feedback_links').select('site_id, label').eq('code', shortCode).maybeSingle();
-    if(error || !data){
-      document.getElementById('siteLabel').textContent = '';
-      body.innerHTML = `<p style="text-align:center; color:var(--text-mid); font-size:13px; padding:20px 0;">
-        This feedback link is invalid or has expired. Please contact us for a new one.
-      </p>`;
-      return;
-    }
-    siteId = data.site_id;
-    siteLabel = data.label;
-  }
-
-  if(!siteId){
-    document.getElementById('siteLabel').textContent = '';
-    body.innerHTML = `<p style="text-align:center; color:var(--text-mid); font-size:13px; padding:20px 0;">
-      This feedback link is missing some information. Please use the link exactly as it was sent to you, or contact us for a new one.
-    </p>`;
-    return;
-  }
-
-  renderForm(sb, siteId, siteLabel);
+function esc(s){
+  return (s===null||s===undefined) ? '' : String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function renderForm(sb, siteId, siteLabel){
+// Only the short-code link format (?c=...) is supported.
+const shortCode = new URLSearchParams(window.location.search).get('c');
+const body = document.getElementById('formBody');
+
+function showMessage(text){
+  document.getElementById('siteLabel').textContent = '';
+  body.innerHTML = `<p class="msg">${esc(text)}</p>`;
+}
+
+async function resolveAndRender(){
+  if(!shortCode){
+    showMessage('This feedback link is missing some information. Please use the link exactly as it was sent to you, or contact us for a new one.');
+    return;
+  }
+  if(!window.supabase){
+    showMessage('Could not connect. Please reload the page and try again.');
+    return;
+  }
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth:{ persistSession:false } });
+
+  // Anonymous visitors can only resolve a code through this function;
+  // they have no direct access to the feedback_links table.
+  const { data: rows, error } = await sb.rpc('get_feedback_link', { p_code: shortCode });
+  const link = Array.isArray(rows) ? rows[0] : null;
+  if(error || !link){
+    showMessage('This feedback link is invalid or has expired. Please contact us for a new one.');
+    return;
+  }
+  renderForm(sb, link.label);
+}
+
+function renderForm(sb, siteLabel){
   document.getElementById('siteLabel').textContent = siteLabel ? `For: ${siteLabel}` : '';
 
   body.innerHTML = `
     <p style="font-size:13px; color:var(--text-mid); line-height:1.6; margin-bottom:18px;">
       Dear Valued Client, we're constantly striving to improve our services. Please share your experience with us over the last month.
     </p>
-    <div class="field"><label>Client Name</label><input id="pf_client" type="text"></div>
-    <div class="field"><label>Designation</label><input id="pf_designation" type="text"></div>
+    <div class="field"><label>Client Name</label><input id="pf_client" type="text" maxlength="200"></div>
+    <div class="field"><label>Designation</label><input id="pf_designation" type="text" maxlength="200"></div>
     <div class="field"><label>Reporting Month</label><input id="pf_period" type="month" value="${new Date().toISOString().slice(0,7)}"></div>
     <div style="margin-top:10px;">
       ${FEEDBACK_AREAS.map((area,i)=>`
@@ -145,11 +142,11 @@ function renderForm(sb, siteId, siteLabel){
           <div class="pf-rating-options">
             ${RATING_OPTIONS.map(o=>`<label><input type="radio" name="pf_rating_${i}" value="${o}"> ${o}</label>`).join('')}
           </div>
-          <input type="text" id="pf_remarks_${i}" placeholder="Remarks (optional)">
+          <input type="text" id="pf_remarks_${i}" placeholder="Remarks (optional)" maxlength="500">
         </div>
       `).join('')}
     </div>
-    <div class="field" style="margin-top:14px;"><label>Areas of Improvement, if any</label><textarea id="pf_improvement" rows="3"></textarea></div>
+    <div class="field" style="margin-top:14px;"><label>Areas of Improvement, if any</label><textarea id="pf_improvement" rows="3" maxlength="2000"></textarea></div>
     <div id="pf_error" class="error"></div>
     <button class="btn-primary" id="pf_submit">Submit Feedback</button>
   `;
@@ -157,7 +154,6 @@ function renderForm(sb, siteId, siteLabel){
   document.getElementById('pf_submit').onclick = async ()=>{
     const errEl = document.getElementById('pf_error');
     errEl.textContent = '';
-    if(!sb){ errEl.textContent = 'Could not connect — please reload the page and try again.'; return; }
     const period = document.getElementById('pf_period').value;
     if(!period){ errEl.textContent = 'Please select the reporting month.'; return; }
     const ratings = FEEDBACK_AREAS.map((area,i)=>{
@@ -170,19 +166,17 @@ function renderForm(sb, siteId, siteLabel){
     const submitBtn = document.getElementById('pf_submit');
     submitBtn.disabled = true; submitBtn.textContent = 'Submitting…';
     try{
-      const { data: inserted, error: insErr } = await sb.from('customer_feedback').insert({
-        site_id: siteId,
-        reporting_period: period + '-01',
-        client_name: document.getElementById('pf_client').value || null,
-        designation: document.getElementById('pf_designation').value || null,
-        areas_of_improvement: document.getElementById('pf_improvement').value || null,
-        submitted_via: 'online',
-        feedback_date: new Date().toISOString().slice(0,10),
-      }).select().single();
-      if(insErr) throw insErr;
-      const ratingRows = ratings.map(r=>({ feedback_id: inserted.id, area: r.area, rating: r.rating, remarks: r.remarks }));
-      const { error: rErr } = await sb.from('customer_feedback_ratings').insert(ratingRows);
-      if(rErr) throw rErr;
+      // One server-side call writes the feedback and all ratings together,
+      // so a failure can never leave a feedback record without its ratings.
+      const { error } = await sb.rpc('submit_feedback', {
+        p_code: shortCode,
+        p_period: period + '-01',
+        p_client: document.getElementById('pf_client').value || null,
+        p_designation: document.getElementById('pf_designation').value || null,
+        p_improvement: document.getElementById('pf_improvement').value || null,
+        p_ratings: ratings
+      });
+      if(error) throw error;
 
       body.innerHTML = `<div class="thankyou">
         <div class="big-check">✓</div>
@@ -191,7 +185,10 @@ function renderForm(sb, siteId, siteLabel){
       </div>`;
     }catch(e){
       submitBtn.disabled = false; submitBtn.textContent = 'Submit Feedback';
-      errEl.textContent = 'Could not submit: ' + (e.message || e);
+      const msg = String(e.message || e);
+      errEl.textContent = /invalid link/i.test(msg)
+        ? 'This feedback link is no longer valid. Please contact us for a new one.'
+        : 'Could not submit: ' + msg;
     }
   };
 }
