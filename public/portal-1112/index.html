@@ -1280,87 +1280,16 @@ async function renderClients(el){
      {k:'primary_contact_email',l:'Contact email'},{k:'primary_contact_phone',l:'Contact phone'}]);
 }
 
-function openProjectManagersPanel(){
-  resetFormModalButtons();
-  document.getElementById('formTitle').textContent = 'Project Managers & Submission Requirements';
-  const wrap = document.getElementById('formFields');
-  wrap.innerHTML = `<p class="hint">Loading projects…</p>`;
-  document.getElementById('formModal').classList.add('show');
-  document.getElementById('saveForm').style.display = 'none';
-  document.getElementById('cancelForm').textContent = 'Close';
-  document.getElementById('cancelForm').onclick = ()=>{
-    document.getElementById('formModal').classList.remove('show');
-    document.getElementById('saveForm').style.display = '';
-    document.getElementById('saveForm').textContent = 'Save';
-    document.getElementById('cancelForm').textContent = 'Cancel';
-  };
-
-  (async ()=>{
-    const writeOk = canWrite();
-    const SUBMISSION_LABELS = { not_required: 'Timesheet not required', timesheet_only: 'Timesheet only', timesheet_and_wcr: 'Timesheet & WCR' };
-    const [{ data: projects, error: pErr }, { data: people, error: oErr }] = await Promise.all([
-      sb.from('projects').select('id, project_name, project_code, project_manager_id, submission_requirement, contracts(clients(client_name))').order('project_name'),
-      sb.from('org_hierarchy').select('id, full_name, designation').order('full_name'),
-    ]);
-    if(pErr || oErr){
-      wrap.innerHTML = `<p class="hint" style="color:var(--red);">Could not load: ${esc((pErr||oErr).message)}</p>`;
-      return;
-    }
-    if(!projects || !projects.length){
-      wrap.innerHTML = `<p class="hint">No projects yet. Projects are created automatically when you add a contract with a project name.</p>`;
-      return;
-    }
-    wrap.innerHTML = `
-      <p class="hint" style="margin-bottom:10px;">Both settings save immediately when changed. Submission requirement applies to every site under that project — invoices are generated per project, so this is set here rather than per site.</p>
-      <div style="display:flex; flex-direction:column; gap:10px; max-height:420px; overflow-y:auto;">
-        ${projects.map(p=>{
-          const req = p.submission_requirement || 'timesheet_only';
-          return `
-          <div style="border:1px solid var(--panel-border); border-radius:8px; padding:10px 12px;">
-            <div style="font-size:13px; color:var(--text-hi); font-weight:500;">${esc(p.project_name)}${p.project_code?` <span style="color:var(--text-dim); font-weight:400;">[${esc(p.project_code)}]</span>`:''}</div>
-            <div style="font-size:11.5px; color:var(--text-dim); margin-bottom:6px;">${esc(p.contracts?.clients?.client_name||'No client linked')}</div>
-            ${writeOk ? `
-              <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                <select data-project-id="${p.id}" data-field="manager">
-                  <option value="">— No manager assigned —</option>
-                  ${people.map(person=>`<option value="${person.id}" ${person.id===p.project_manager_id?'selected':''}>${esc(person.full_name)}${person.designation?' — '+esc(person.designation):''}</option>`).join('')}
-                </select>
-                <select data-project-id="${p.id}" data-field="submission_requirement">
-                  <option value="not_required" ${req==='not_required'?'selected':''}>Timesheet not required</option>
-                  <option value="timesheet_only" ${req==='timesheet_only'?'selected':''}>Timesheet only</option>
-                  <option value="timesheet_and_wcr" ${req==='timesheet_and_wcr'?'selected':''}>Timesheet & WCR</option>
-                </select>
-                <span class="pm-save-status" data-status-for="${p.id}" style="font-size:11px; color:var(--cyan-bright);"></span>
-              </div>
-            ` : `<div style="font-size:12.5px; color:var(--text-mid);">
-                ${p.project_manager_id ? esc((people.find(pe=>pe.id===p.project_manager_id)||{}).full_name || '—') : 'No manager assigned'}
-                &nbsp;·&nbsp; ${SUBMISSION_LABELS[req]}
-              </div>`}
-          </div>
-        `;}).join('')}
-      </div>
-    `;
-    if(writeOk){
-      wrap.querySelectorAll('[data-project-id]').forEach(sel=>{
-        sel.onchange = async (e)=>{
-          const projectId = e.target.dataset.projectId;
-          const field = e.target.dataset.field;
-          const value = field === 'submission_requirement' ? e.target.value : (e.target.value || null);
-          const column = field === 'submission_requirement' ? 'submission_requirement' : 'project_manager_id';
-          const statusEl = wrap.querySelector(`[data-status-for="${projectId}"]`);
-          statusEl.textContent = 'Saving…';
-          const { error } = await sb.from('projects').update({ [column]: value }).eq('id', projectId);
-          statusEl.textContent = error ? 'Could not save' : 'Saved ✓';
-          statusEl.style.color = error ? 'var(--red)' : 'var(--cyan-bright)';
-          if(!error) setTimeout(()=>{ statusEl.textContent = ''; }, 2000);
-        };
-      });
-    }
-  })();
-}
+// Options shared by both the Add Contract and Edit Contract project fields,
+// so a project's submission requirement is always presented the same way.
+const SUBMISSION_REQUIREMENT_OPTIONS = [
+  { value:'not_required', label:'Timesheet not required' },
+  { value:'timesheet_only', label:'Timesheet only' },
+  { value:'timesheet_and_wcr', label:'Timesheet & WCR' },
+];
 
 async function renderContracts(el){
-  const { data, error } = await sb.from('contracts').select('*, clients(client_name), projects(project_name)').order('contract_expiry');
+  const { data, error } = await sb.from('contracts').select('*, clients(client_name), projects(project_name, org_hierarchy(full_name))').order('contract_expiry');
   if(error) throw error;
   const rows = data||[];
   const writeOk = canWrite();
@@ -1368,20 +1297,24 @@ async function renderContracts(el){
     <div class="panel-title" style="margin:0;">Projects & Contracts (${rows.length})</div>
     <div style="display:flex; gap:8px;">
       <input class="search-box" id="tblSearch" placeholder="Search...">
-      <button class="btn" id="manageManagersBtn">👤 Managers & Submission Requirements</button>
       ${writeOk ? `<button class="btn" id="importBtn">⬆ Import CSV</button>
       <button class="btn btn-primary" id="addBtn">+ Add Contract</button>` : ''}
     </div></div>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Client</th><th>Project(s)</th><th>Ref</th><th>Expiry</th><th>Monthly Value</th><th>Manpower</th><th>Status</th>${writeOk?'<th></th>':''}</tr></thead>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Client</th><th>Project(s)</th><th>Manager</th><th>Ref</th><th>Expiry</th><th>Monthly Value</th><th>Manpower</th><th>Status</th>${writeOk?'<th></th>':''}</tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>{
       const projNames = (r.projects||[]).map(p=>p.project_name);
       const projCell = projNames.length===0 ? '—'
         : projNames.length===1 ? esc(projNames[0])
         : `${esc(projNames[0])} <span class="badge progress" title="${esc(projNames.join(', '))}">+${projNames.length-1} more</span>`;
-      return `<tr><td>${esc(r.clients?.client_name||'—')}</td><td>${projCell}</td><td>${esc(r.contract_ref)}</td><td>${fmtDate(r.contract_expiry)}</td><td>${r.monthly_invoice_value?('AED '+r.monthly_invoice_value):'—'}</td><td>${r.manpower_sanctioned??'—'}</td><td><span class="badge ${r.status==='active'?'active':'expired'}">${r.status}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="${esc(r.contract_ref)}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`;
+      // A contract can have several projects, possibly with different managers -
+      // show the first, and a "+N more" badge (with the rest in the tooltip) if they differ.
+      const mgrNames = [...new Set((r.projects||[]).map(p=>p.org_hierarchy?.full_name).filter(Boolean))];
+      const mgrCell = mgrNames.length===0 ? '<span style="color:var(--text-dim);">Unassigned</span>'
+        : mgrNames.length===1 ? esc(mgrNames[0])
+        : `${esc(mgrNames[0])} <span class="badge progress" title="${esc(mgrNames.join(', '))}">+${mgrNames.length-1} more</span>`;
+      return `<tr><td>${esc(r.clients?.client_name||'—')}</td><td>${projCell}</td><td>${mgrCell}</td><td>${esc(r.contract_ref)}</td><td>${fmtDate(r.contract_expiry)}</td><td>${r.monthly_invoice_value?('AED '+r.monthly_invoice_value):'—'}</td><td>${r.manpower_sanctioned??'—'}</td><td><span class="badge ${r.status==='active'?'active':'expired'}">${r.status}</span></td>${writeOk?`<td><button class="icon-btn" data-edit-idx="${i}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-delete-id="${r.id}" data-delete-label="${esc(r.contract_ref)}" title="Delete">🗑</button>`:''}</td>`:''}</tr>`;
     }).join('')
-      : `<tr class="empty-row"><td colspan="${writeOk?8:7}">No contracts yet.</td></tr>`}</tbody></table></div></div>`;
-  document.getElementById('manageManagersBtn').onclick = openProjectManagersPanel;
+      : `<tr class="empty-row"><td colspan="${writeOk?9:8}">No contracts yet.</td></tr>`}</tbody></table></div></div>`;
   document.getElementById('tblSearch').oninput = (e)=>{
     const q = e.target.value.toLowerCase();
     el.querySelectorAll('table tbody tr').forEach(tr=>{
@@ -1423,7 +1356,7 @@ async function renderContracts(el){
   });
 }
 
-function openContractForm(clients, editingRow){
+async function openContractForm(clients, editingRow){
   resetFormModalButtons();
   document.getElementById('formTitle').textContent = editingRow ? 'Edit Contract' : 'Add Contract';
   const wrap = document.getElementById('formFields');
@@ -1451,23 +1384,74 @@ function openContractForm(clients, editingRow){
     <div class="field"><label>Monthly invoice value (AED)</label><input id="cf_value" type="number" value="${editingRow&&editingRow.monthly_invoice_value!=null?editingRow.monthly_invoice_value:''}"></div>
     <div class="field"><label>Manpower sanctioned</label><input id="cf_manpower" type="number" value="${editingRow&&editingRow.manpower_sanctioned!=null?editingRow.manpower_sanctioned:''}"></div>
     <div class="field"><label>Scope of work</label><textarea id="cf_scope" rows="3">${editingRow&&editingRow.scope_of_work?esc(editingRow.scope_of_work):''}</textarea></div>
-    ${!editingRow ? `
-    <div class="field"><label>Project name (optional — creates a linked project so you can add its sites next)</label><input id="cf_project" type="text" placeholder="e.g. Al Ain Mall FM Contract"></div>
-    <div class="field"><label>Project code (optional)</label><input id="cf_projectcode" type="text" placeholder="e.g. PRJ-AUH-014"></div>
-    <div class="field"><label>Submission requirement</label>
-      <select id="cf_requiresWcr">
-        <option value="not_required">Timesheet not required</option>
-        <option value="timesheet_only" selected>Timesheet only</option>
-        <option value="timesheet_and_wcr">Timesheet & WCR</option>
-      </select>
-      <p class="hint" style="margin-top:4px;">Applies to every site created under this project — invoices are generated per project, so this is set here rather than per site. Can be changed later from Contracts → Managers & Submission Requirements.</p>
-    </div>
-    ` : `<p class="hint">To add or rename projects under this contract, use the Sites tab's project picker, or the Managers & Submission Requirements panel above.</p>`}
+    <div id="cf_projectSection"><p class="hint">Loading project details…</p></div>
   `;
   document.getElementById('cf_client').onchange = (e)=>{
     document.getElementById('cf_newClientFields').style.display = e.target.value==='__new__' ? 'block' : 'none';
   };
   document.getElementById('formModal').classList.add('show');
+
+  // ---- project section: create fields (new contract) or a mapping UI
+  //      for the contract's own project(s) (existing contract) ----
+  const projectSection = document.getElementById('cf_projectSection');
+  const people = await getOrgPeopleForForms();
+  const managerOptionsHtml = (selectedId)=> `<option value="">— No manager assigned —</option>` +
+    people.map(p=>`<option value="${p.id}" ${p.id===selectedId?'selected':''}>${esc(p.full_name)}${p.designation?' — '+esc(p.designation):''}</option>`).join('');
+  const submissionOptionsHtml = (selected)=> SUBMISSION_REQUIREMENT_OPTIONS
+    .map(o=>`<option value="${o.value}" ${o.value===(selected||'timesheet_only')?'selected':''}>${o.label}</option>`).join('');
+  const newProjectFieldsHtml = (heading)=> `
+    ${heading?`<p class="hint" style="margin-bottom:8px;">${heading}</p>`:''}
+    <div class="field"><label>Project name${editingRow?'':' (optional — creates a linked project so you can add its sites next)'}</label><input id="cf_project" type="text" placeholder="e.g. Al Ain Mall FM Contract"></div>
+    <div class="field"><label>Project code (optional)</label><input id="cf_projectcode" type="text" placeholder="e.g. PRJ-AUH-014"></div>
+    <div class="field"><label>Project Manager</label><select id="cf_projectManager">${managerOptionsHtml(null)}</select></div>
+    <div class="field"><label>Submission requirement</label>
+      <select id="cf_requiresWcr">${submissionOptionsHtml('timesheet_only')}</select>
+      <p class="hint" style="margin-top:4px;">Applies to every site under this project — invoices are generated per project, so this is set here rather than per site.</p>
+    </div>`;
+
+  if(!editingRow){
+    projectSection.innerHTML = newProjectFieldsHtml(null);
+  } else {
+    const { data: contractProjects, error: cpErr } = await sb.from('projects')
+      .select('id, project_name, project_code, project_manager_id, submission_requirement')
+      .eq('contract_id', editingRow.id).order('project_name');
+    if(cpErr){
+      projectSection.innerHTML = `<p class="hint" style="color:var(--red);">Could not load this contract's projects: ${esc(cpErr.message)}</p>`;
+    } else if(!contractProjects || !contractProjects.length){
+      // This contract has no project yet - offer to create the first one, same as a new contract.
+      projectSection.innerHTML = newProjectFieldsHtml('No project exists yet under this contract.');
+    } else {
+      const fieldsFor = (proj)=> `
+        <div class="field"><label>Manager</label><select id="cf_projFieldManager">${managerOptionsHtml(proj.project_manager_id)}</select></div>
+        <div class="field"><label>Submission requirement</label><select id="cf_projFieldSubmission">${submissionOptionsHtml(proj.submission_requirement)}</select></div>`;
+      if(contractProjects.length === 1){
+        const proj = contractProjects[0];
+        projectSection.innerHTML = `
+          <div style="border-top:1px solid var(--panel-border); margin:14px 0 10px; padding-top:10px;">
+            <p class="hint" style="margin-bottom:8px;"><b>${esc(proj.project_name)}</b>${proj.project_code?' ['+esc(proj.project_code)+']':''}</p>
+            ${fieldsFor(proj)}
+          </div>`;
+        projectSection.dataset.editProjectId = proj.id;
+      } else {
+        // Multiple projects under one contract - pick which one to edit.
+        const picker = contractProjects.map(p=>`<option value="${p.id}">${esc(p.project_name)}${p.project_code?' ['+esc(p.project_code)+']':''}</option>`).join('');
+        projectSection.innerHTML = `
+          <div style="border-top:1px solid var(--panel-border); margin:14px 0 10px; padding-top:10px;">
+            <div class="field"><label>Project</label><select id="cf_projectPicker">${picker}</select></div>
+            <div id="cf_projectPickerFields"></div>
+          </div>`;
+        const fieldsWrap = document.getElementById('cf_projectPickerFields');
+        const renderFor = (id)=>{
+          const proj = contractProjects.find(p=>p.id===id);
+          fieldsWrap.innerHTML = fieldsFor(proj);
+          projectSection.dataset.editProjectId = proj.id;
+        };
+        document.getElementById('cf_projectPicker').onchange = (e)=> renderFor(e.target.value);
+        renderFor(contractProjects[0].id);
+      }
+    }
+  }
+
   document.getElementById('saveForm').onclick = async ()=>{
     let clientId = document.getElementById('cf_client').value;
     if(!clientId){ alert('Please select or add a client.'); return; }
@@ -1499,16 +1483,41 @@ function openContractForm(clients, editingRow){
     if(editingRow){
       const { error: updErr } = await sb.from('contracts').update(contract).eq('id', editingRow.id);
       if(updErr){ alert('Update failed: '+updErr.message); return; }
+
+      const editProjectId = projectSection.dataset.editProjectId;
+      if(editProjectId){
+        // Existing project under this contract - update its manager/requirement.
+        const managerVal = document.getElementById('cf_projFieldManager').value || null;
+        const submissionVal = document.getElementById('cf_projFieldSubmission').value;
+        const { error: projUpdErr } = await sb.from('projects').update({
+          project_manager_id: managerVal, submission_requirement: submissionVal
+        }).eq('id', editProjectId);
+        if(projUpdErr) alert('Contract saved, but the project could not be updated: '+projUpdErr.message);
+      } else {
+        // No project existed yet under this contract - create one if a name was given.
+        const projectNameEl = document.getElementById('cf_project');
+        const projectName = projectNameEl ? projectNameEl.value : '';
+        if(projectName){
+          const { error: projErr } = await sb.from('projects').insert({
+            contract_id: editingRow.id,
+            project_name: projectName,
+            project_code: document.getElementById('cf_projectcode').value || null,
+            project_manager_id: document.getElementById('cf_projectManager').value || null,
+            submission_requirement: document.getElementById('cf_requiresWcr').value
+          });
+          if(projErr) alert('Contract saved, but the project could not be created: '+projErr.message);
+        }
+      }
     } else {
       const { data: contractData, error: contractErr } = await sb.from('contracts').insert(contract).select().single();
       if(contractErr){ alert('Save failed: '+contractErr.message); return; }
       const projectName = document.getElementById('cf_project').value;
       if(projectName){
-        const projectCode = document.getElementById('cf_projectcode').value;
         const { error: projErr } = await sb.from('projects').insert({
           contract_id: contractData.id,
           project_name: projectName,
-          project_code: projectCode || null,
+          project_code: document.getElementById('cf_projectcode').value || null,
+          project_manager_id: document.getElementById('cf_projectManager').value || null,
           submission_requirement: document.getElementById('cf_requiresWcr').value
         });
         if(projErr) alert('Contract saved, but the project could not be created: '+projErr.message);
