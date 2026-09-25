@@ -729,9 +729,14 @@ function createSupabaseClient(){
 async function checkConnection(){
   try{
     const { error } = await sb.from('sites').select('id', { count:'exact', head:true });
-    if(error) throw error;
+    // Any response from Supabase - including a permission-denied error - proves
+    // the database is reachable. RLS/grants are a separate concern from
+    // reachability, so a permission error still counts as "Connected".
+    // Only a genuine network failure (e.g. no internet, DNS, CORS) has no `code`.
+    if(error && !error.code) throw error;
     document.getElementById('connDot').className = 'dot live';
     document.getElementById('connText').textContent = 'Connected';
+    document.getElementById('connDot').title = '';
   }catch(e){
     document.getElementById('connDot').className = 'dot off';
     document.getElementById('connText').textContent = 'Connection issue';
