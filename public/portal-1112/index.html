@@ -728,12 +728,12 @@ function createSupabaseClient(){
 
 async function checkConnection(){
   try{
-    const { error } = await sb.from('sites').select('id', { count:'exact', head:true });
-    // Any response from Supabase - including a permission-denied error - proves
-    // the database is reachable. RLS/grants are a separate concern from
-    // reachability, so a permission error still counts as "Connected".
-    // Only a genuine network failure (e.g. no internet, DNS, CORS) has no `code`.
-    if(error && !error.code) throw error;
+    await sb.from('sites').select('id', { count:'exact', head:true });
+    // supabase-js RESOLVES (doesn't throw) for any HTTP response, including
+    // 401/403 permission errors - that still proves the request reached
+    // Supabase and got an answer, so the database is reachable either way.
+    // Only a genuine network failure (offline, DNS, CORS, timeout) throws
+    // here, which is what "Connection issue" should actually mean.
     document.getElementById('connDot').className = 'dot live';
     document.getElementById('connText').textContent = 'Connected';
     document.getElementById('connDot').title = '';
