@@ -2491,13 +2491,13 @@ async function renderTodos(el){
         <button class="btn btn-primary" id="addTodoBtn">+ Add Task</button>
       </div>
     </div>
-    <p class="hint" style="margin-bottom:12px;">Every day at <b>${settings.dailyTime} (UAE time)</b>${settings.enabled?'':' (currently off)'}, this app announces your own pending tasks out loud (your browser's voice) and pops up a summary while it's open — and, separately, an email digest goes out at the same time to your own email even if nobody has the app open. Individual tasks also get their own alert the moment they become overdue. If a task is assigned to a manager, they get a daily reminder email once it's overdue, until it's marked complete. Tasks stay listed here — nothing disappears until marked done. Your tasks are private to you; admins can see and manage everyone's for oversight.</p>
+    <p class="hint" style="margin-bottom:12px;">Every day at <b>${settings.dailyTime} (UAE time)</b>${settings.enabled?'':' (currently off)'}, this app announces your own pending tasks out loud (your browser's voice) and pops up a summary while it's open — and, separately, an email digest goes out at the same time to your own email even if nobody has the app open. Individual tasks also get their own alert the moment they become overdue. If a task is assigned to a manager or another recipient, they get a daily reminder email once it's overdue, until it's marked complete. Tasks stay listed here — nothing disappears until marked done. Your tasks are private to you; admins can see and manage everyone's for oversight.</p>
     <div style="overflow-x:auto;"><table><thead><tr><th>Date Added</th>${isAdmin()?'<th>Owner</th>':''}<th>Task</th><th>Assigned To</th><th>Due</th><th>Status</th><th></th></tr></thead>
     <tbody>${rows.length? rows.map((r,i)=>`<tr>
         <td>${fmtDate(r.created_at)}</td>
         ${isAdmin()?`<td>${r.owner_id ? esc(ownerEmailById[r.owner_id]||'—') : '<span style="color:var(--text-dim);">Unowned (legacy)</span>'}</td>`:''}
         <td>${esc(r.title)}${r.description?`<div style="color:var(--text-dim); font-size:11.5px; margin-top:2px;">${esc(r.description)}</div>`:''}</td>
-        <td>${r.org_hierarchy?.full_name ? esc(r.org_hierarchy.full_name) : '<span style="color:var(--text-dim);">—</span>'}</td>
+        <td>${r.org_hierarchy?.full_name ? esc(r.org_hierarchy.full_name) : (r.assigned_email ? esc(r.assigned_email)+' <span style="color:var(--text-dim); font-size:10.5px;">(external)</span>' : '<span style="color:var(--text-dim);">—</span>')}</td>
         <td>${r.due_date ? new Date(r.due_date).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
         <td>${todoStatusBadge(r)}</td>
         <td>
@@ -2542,21 +2542,36 @@ function openTodoForm(editingRow){
     <div class="field"><label>Notes (optional)</label><textarea id="td_desc" rows="3">${editingRow&&editingRow.description?esc(editingRow.description):''}</textarea></div>
     <div class="field"><label>Due date</label><input id="td_dueDate" type="date" value="${dueDateVal}"></div>
     <div class="field"><label>Due time</label><input id="td_dueTime" type="time" value="${dueTimeVal || '17:00'}"></div>
-    <div class="field"><label>Assign to manager (optional)</label><select id="td_assignedTo"><option value="">— Just for me —</option></select>
+    <div class="field"><label>Assign to (optional)</label><select id="td_assignedTo"><option value="">— Just for me —</option><option value="__other__">Other (enter email)…</option></select>
       <p class="hint" style="margin-top:4px;">If assigned, they'll get a daily reminder email once this task is overdue, until it's marked complete — even if they don't use this app.</p>
+    </div>
+    <div class="field" id="td_otherEmailField" style="display:none;">
+      <label>Recipient email</label>
+      <input id="td_otherEmail" type="email" placeholder="e.g. contractor@example.com" value="${editingRow&&editingRow.assigned_email?esc(editingRow.assigned_email):''}">
+      <p class="hint" style="margin-top:4px;">For someone not listed in Org Structure — a contractor, client contact, or anyone else who needs this reminder.</p>
     </div>
     <div id="td_error" class="error"></div>
   `;
   document.getElementById('formModal').classList.add('show');
 
+  const assignedSel = document.getElementById('td_assignedTo');
+  const otherField = document.getElementById('td_otherEmailField');
+  function syncOtherField(){
+    otherField.style.display = assignedSel.value === '__other__' ? 'block' : 'none';
+  }
+  assignedSel.onchange = syncOtherField;
+  if(editingRow && editingRow.assigned_email && !editingRow.assigned_to){
+    assignedSel.value = '__other__';
+  }
+  syncOtherField();
+
   getOrgPeopleForForms().then(people=>{
-    const sel = document.getElementById('td_assignedTo');
     people.forEach(p=>{
       const opt = document.createElement('option');
       opt.value = p.id;
       opt.textContent = p.full_name + (p.designation ? ' — '+p.designation : '') + (!p.email ? ' (no email on file)' : '');
       if(editingRow && editingRow.assigned_to === p.id) opt.selected = true;
-      sel.appendChild(opt);
+      assignedSel.appendChild(opt);
     });
   });
 
@@ -2568,12 +2583,24 @@ function openTodoForm(editingRow){
     const dueTime = document.getElementById('td_dueTime').value || '17:00';
     if(!title){ errEl.textContent = 'Task details are required.'; return; }
     if(!dueDate){ errEl.textContent = 'Please pick a due date.'; return; }
+
+    const assignedVal = assignedSel.value;
+    let assignedTo = null, assignedEmail = null;
+    if(assignedVal === '__other__'){
+      assignedEmail = document.getElementById('td_otherEmail').value.trim();
+      if(!assignedEmail){ errEl.textContent = 'Please enter the recipient\'s email address.'; return; }
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(assignedEmail)){ errEl.textContent = 'Please enter a valid email address.'; return; }
+    } else if(assignedVal){
+      assignedTo = assignedVal;
+    }
+
     const dueDateTime = new Date(`${dueDate}T${dueTime}:00`);
     const values = {
       title,
       description: document.getElementById('td_desc').value || null,
       due_date: dueDateTime.toISOString(),
-      assigned_to: document.getElementById('td_assignedTo').value || null,
+      assigned_to: assignedTo,
+      assigned_email: assignedEmail,
     };
     let result;
     if(editingRow) result = await sb.from('reminders').update(values).eq('id', editingRow.id);
