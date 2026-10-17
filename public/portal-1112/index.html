@@ -1667,10 +1667,19 @@ async function renderStaff(el){
   const staffFields = [
     {k:'employee_code',l:'Employee code'},{k:'full_name',l:'Full name'},{k:'designation',l:'Designation'},
     {k:'category',l:'Category'},{k:'contact_number',l:'Contact number'},{k:'joining_date',l:'Joining date',type:'date'},
-    {k:'site_id',l:'Site ID (UUID, optional)'}
+    {k:'site_id',l:'Site (optional)',type:'site-search'}
+  ];
+  // Separate field list for the CSV importer: a site_name column (matched
+  // against existing sites by name, case-insensitive) is the primary way to
+  // assign a site in bulk; the legacy site_id (UUID) column is still accepted
+  // for anyone with older files, and wins if both are present in a row.
+  const staffBulkFields = [
+    {k:'employee_code',l:'Employee code'},{k:'full_name',l:'Full name'},{k:'designation',l:'Designation'},
+    {k:'category',l:'Category'},{k:'contact_number',l:'Contact number'},{k:'joining_date',l:'Joining date',type:'date'},
+    {k:'site_name',l:'Site name (optional)'},{k:'site_id',l:'Site ID (UUID, optional — alternative to Site name)'}
   ];
   if(writeOk){
-    document.getElementById('importBtn').onclick = ()=> openBulkImport('staff', staffFields, 'Staff (site_id is optional but must be a valid site UUID if included)');
+    document.getElementById('importBtn').onclick = ()=> openBulkImport('staff', staffBulkFields, 'Staff (site_name is matched against your existing sites; unmatched or blank leaves the staff member unassigned)');
     document.getElementById('addBtn').onclick = ()=> openForm('Staff Member', staffFields, async(values)=>{
       const { error } = await sb.from('staff').insert(values);
       if(error) alert('Save failed: '+error.message); else renderContent();
@@ -3284,6 +3293,27 @@ document.getElementById('doBulkImport').onclick = async ()=>{
     return;
   }
 
+  let unmatchedSiteNames = 0;
+  if(bulkContext.table === 'staff'){
+    // Staff rows may name their site by site_name (preferred) or the legacy
+    // site_id (UUID) column. Resolve site_name -> site_id here so the insert
+    // below only ever deals with a real site_id column; a name that doesn't
+    // match any site isn't treated as an error - the row still imports,
+    // just left unassigned to a site, same as leaving the column blank.
+    const sites = await getSitesForForms();
+    const siteIdByLowerName = {};
+    sites.forEach(s => { siteIdByLowerName[s.site_name.trim().toLowerCase()] = s.id; });
+    rows.forEach(row => {
+      if(row.site_name){
+        if(!row.site_id){
+          const match = siteIdByLowerName[String(row.site_name).trim().toLowerCase()];
+          if(match) row.site_id = match; else unmatchedSiteNames++;
+        }
+        delete row.site_name; // not a real column on `staff`
+      }
+    });
+  }
+
   resultEl.textContent = `Importing ${rows.length} row(s)…`;
   let success = 0, failed = 0, firstError = '';
 
@@ -3316,13 +3346,15 @@ document.getElementById('doBulkImport').onclick = async ()=>{
     }
   }
 
+  const unmatchedNote = unmatchedSiteNames ? ` ${unmatchedSiteNames} row(s) had a site name that didn't match any existing site — those were imported with no site assigned; edit them individually to fix.` : '';
   if(failed === 0){
-    resultEl.style.color = 'var(--cyan-bright)';
-    resultEl.textContent = `Done — ${success} row(s) imported successfully.`;
-    setTimeout(()=>{ document.getElementById('bulkModal').classList.remove('show'); renderContent(); }, 1100);
+    resultEl.style.color = unmatchedSiteNames ? 'var(--amber)' : 'var(--cyan-bright)';
+    resultEl.textContent = `Done — ${success} row(s) imported successfully.${unmatchedNote}`;
+    if(!unmatchedSiteNames) setTimeout(()=>{ document.getElementById('bulkModal').classList.remove('show'); renderContent(); }, 1100);
+    else setTimeout(()=>{ document.getElementById('bulkModal').classList.remove('show'); renderContent(); }, 3500);
   } else {
     resultEl.style.color = 'var(--red)';
-    resultEl.textContent = `${success} row(s) imported, ${failed} failed. First error: ${firstError}`;
+    resultEl.textContent = `${success} row(s) imported, ${failed} failed. First error: ${firstError}${unmatchedNote}`;
   }
 };
 
