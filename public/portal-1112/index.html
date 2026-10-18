@@ -1679,7 +1679,7 @@ async function renderStaff(el){
     {k:'site_name',l:'Site name (required)'},{k:'site_id',l:'Site ID (UUID — alternative to Site name)'}
   ];
   if(writeOk){
-    document.getElementById('importBtn').onclick = async ()=>{ openBulkImport('staff', staffBulkFields, 'Staff (every row needs a site_name that matches an existing site, or a site_id)', await sitesReferenceForImport()); };
+    document.getElementById('importBtn').onclick = async ()=>{ openBulkImport('staff', staffBulkFields, 'Staff (every row needs a site_name that matches an existing site, or a site_id)', await sitesReferenceForImport('site_name')); };
     document.getElementById('addBtn').onclick = ()=> openForm('Staff Member', staffFields, async(values)=>{
       const { error } = await sb.from('staff').insert(values);
       if(error) alert('Save failed: '+error.message); else renderContent();
@@ -3012,11 +3012,13 @@ function buildReferenceHTML(ref){
       <td style="font-family:'JetBrains Mono',monospace; font-size:10px; white-space:nowrap;">
         <button class="copy-id-btn" data-copy="${esc(r.id)}" title="Copy ID">⧉</button> ${esc(r.id)}
       </td>
-      <td>${esc(r.label)}</td>
+      <td style="white-space:nowrap;">
+        <button class="copy-id-btn" data-copy="${esc(r.label)}" title="Copy name">⧉</button> ${esc(r.label)}
+      </td>
     </tr>`).join('');
   return `
     <div class="field">
-      <label>${esc(ref.title)} — click ⧉ to copy the ID into your "${esc(ref.idColumnName)}" column</label>
+      <label>${esc(ref.title)} — click ⧉ to copy the ID into your "${esc(ref.idColumnName)}" column${ref.nameColumnName ? `, or the name into a "${esc(ref.nameColumnName)}" column` : ''}</label>
       <input type="text" id="bulkRefSearch" placeholder="Search..." style="margin-bottom:6px;">
       <div style="max-height:170px; overflow-y:auto; border:1px solid var(--panel-border); border-radius:8px;">
         <table style="width:100%; font-size:11.5px;">
@@ -3070,11 +3072,12 @@ async function getSitesForForms(){
   sitesCacheForForms = data || [];
   return sitesCacheForForms;
 }
-async function sitesReferenceForImport(){
+async function sitesReferenceForImport(nameColumnName){
   const sites = await getSitesForForms();
   return {
     title: 'Existing Sites',
     idColumnName: 'site_id',
+    nameColumnName, // only set where the importer actually matches by name (e.g. Staff's site_name)
     rows: sites.map(s => ({ id: s.id, label: s.site_name })),
   };
 }
