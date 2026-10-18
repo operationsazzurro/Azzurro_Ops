@@ -1676,10 +1676,10 @@ async function renderStaff(el){
   const staffBulkFields = [
     {k:'employee_code',l:'Employee code'},{k:'full_name',l:'Full name'},{k:'designation',l:'Designation'},
     {k:'category',l:'Category'},{k:'contact_number',l:'Contact number'},{k:'joining_date',l:'Joining date',type:'date'},
-    {k:'site_name',l:'Site name (optional)'},{k:'site_id',l:'Site ID (UUID, optional — alternative to Site name)'}
+    {k:'site_name',l:'Site name (required)'},{k:'site_id',l:'Site ID (UUID — alternative to Site name)'}
   ];
   if(writeOk){
-    document.getElementById('importBtn').onclick = ()=> openBulkImport('staff', staffBulkFields, 'Staff (site_name is matched against your existing sites; unmatched or blank leaves the staff member unassigned)');
+    document.getElementById('importBtn').onclick = async ()=>{ openBulkImport('staff', staffBulkFields, 'Staff (every row needs a site_name that matches an existing site, or a site_id)', await sitesReferenceForImport()); };
     document.getElementById('addBtn').onclick = ()=> openForm('Staff Member', staffFields, async(values)=>{
       const { error } = await sb.from('staff').insert(values);
       if(error) alert('Save failed: '+error.message); else renderContent();
@@ -3293,39 +3293,52 @@ document.getElementById('doBulkImport').onclick = async ()=>{
     return;
   }
 
-  let unmatchedSiteNames = 0;
+  let success = 0, failed = 0, firstError = '';
+  let rowsForInsert = rows;
+
   if(bulkContext.table === 'staff'){
     // Staff rows may name their site by site_name (preferred) or the legacy
     // site_id (UUID) column. Resolve site_name -> site_id here so the insert
-    // below only ever deals with a real site_id column; a name that doesn't
-    // match any site isn't treated as an error - the row still imports,
-    // just left unassigned to a site, same as leaving the column blank.
+    // below only ever deals with a real site_id column. A site is required
+    // for every row — a blank site_name/site_id, or a name that doesn't
+    // match any existing site, is a validation failure for that row, not
+    // an auto-skip, so it's dropped from the import and counted as failed.
     const sites = await getSitesForForms();
     const siteIdByLowerName = {};
     sites.forEach(s => { siteIdByLowerName[s.site_name.trim().toLowerCase()] = s.id; });
+    rowsForInsert = [];
     rows.forEach(row => {
-      if(row.site_name){
-        if(!row.site_id){
-          const match = siteIdByLowerName[String(row.site_name).trim().toLowerCase()];
-          if(match) row.site_id = match; else unmatchedSiteNames++;
-        }
-        delete row.site_name; // not a real column on `staff`
+      if(!row.site_id && row.site_name){
+        const match = siteIdByLowerName[String(row.site_name).trim().toLowerCase()];
+        if(match) row.site_id = match;
+      }
+      delete row.site_name; // not a real column on `staff`
+      if(row.site_id){
+        rowsForInsert.push(row);
+      } else {
+        failed++;
+        if(!firstError) firstError = `"${row.full_name || 'a row'}" has no site_name matching an existing site, and no valid site_id.`;
       }
     });
   }
 
-  resultEl.textContent = `Importing ${rows.length} row(s)…`;
-  let success = 0, failed = 0, firstError = '';
+  resultEl.textContent = `Importing ${rowsForInsert.length} row(s)…`;
+
+  if(!rowsForInsert.length){
+    resultEl.style.color = 'var(--red)';
+    resultEl.textContent = failed ? `0 row(s) imported, ${failed} failed. First error: ${firstError}` : 'No valid rows to import.';
+    return;
+  }
 
   if(bulkContext.table === 'contracts'){
     // Contracts need row-by-row handling so each row's project_name/project_code
     // (not real columns on `contracts`) can be used to create a linked project
     // right after that specific contract is inserted.
-    for(let i=0; i<rows.length; i++){
-      const row = rows[i];
+    for(let i=0; i<rowsForInsert.length; i++){
+      const row = rowsForInsert[i];
       const { project_name, project_code, ...contractOnly } = row;
       const { data: inserted, error: cErr } = await sb.from('contracts').insert(contractOnly).select('id').single();
-      if(cErr){ failed++; if(!firstError) firstError = cErr.message; resultEl.textContent = `Importing… ${i+1} / ${rows.length} processed.`; continue; }
+      if(cErr){ failed++; if(!firstError) firstError = cErr.message; resultEl.textContent = `Importing… ${i+1} / ${rowsForInsert.length} processed.`; continue; }
       if(project_name){
         const { error: pErr } = await sb.from('projects').insert({
           contract_id: inserted.id, project_name, project_code: project_code || null
@@ -3333,28 +3346,26 @@ document.getElementById('doBulkImport').onclick = async ()=>{
         if(pErr){ if(!firstError) firstError = 'Contract saved but project failed: ' + pErr.message; }
       }
       success++;
-      resultEl.textContent = `Importing… ${i+1} / ${rows.length} processed.`;
+      resultEl.textContent = `Importing… ${i+1} / ${rowsForInsert.length} processed.`;
     }
   } else {
     const batchSize = 300;
-    for(let i=0; i<rows.length; i+=batchSize){
-      const batch = rows.slice(i, i+batchSize);
+    for(let i=0; i<rowsForInsert.length; i+=batchSize){
+      const batch = rowsForInsert.slice(i, i+batchSize);
       const { error } = await sb.from(bulkContext.table).insert(batch);
       if(error){ failed += batch.length; if(!firstError) firstError = error.message; }
       else success += batch.length;
-      resultEl.textContent = `Importing… ${Math.min(i+batchSize, rows.length)} / ${rows.length} processed.`;
+      resultEl.textContent = `Importing… ${Math.min(i+batchSize, rowsForInsert.length)} / ${rowsForInsert.length} processed.`;
     }
   }
 
-  const unmatchedNote = unmatchedSiteNames ? ` ${unmatchedSiteNames} row(s) had a site name that didn't match any existing site — those were imported with no site assigned; edit them individually to fix.` : '';
   if(failed === 0){
-    resultEl.style.color = unmatchedSiteNames ? 'var(--amber)' : 'var(--cyan-bright)';
-    resultEl.textContent = `Done — ${success} row(s) imported successfully.${unmatchedNote}`;
-    if(!unmatchedSiteNames) setTimeout(()=>{ document.getElementById('bulkModal').classList.remove('show'); renderContent(); }, 1100);
-    else setTimeout(()=>{ document.getElementById('bulkModal').classList.remove('show'); renderContent(); }, 3500);
+    resultEl.style.color = 'var(--cyan-bright)';
+    resultEl.textContent = `Done — ${success} row(s) imported successfully.`;
+    setTimeout(()=>{ document.getElementById('bulkModal').classList.remove('show'); renderContent(); }, 1100);
   } else {
     resultEl.style.color = 'var(--red)';
-    resultEl.textContent = `${success} row(s) imported, ${failed} failed. First error: ${firstError}${unmatchedNote}`;
+    resultEl.textContent = `${success} row(s) imported, ${failed} failed. First error: ${firstError}`;
   }
 };
 
