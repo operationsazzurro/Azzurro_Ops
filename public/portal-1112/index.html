@@ -782,7 +782,17 @@ async function switchModule(tabId){
   requestAnimationFrame(()=>{ if(content) content.classList.remove('module-exit'); });
 }
 
+// While Sara is thinking, other parts of the app (mic restarts, wake-window
+// timeout) used to reset the orb after a second. Now those requests wait until
+// the answer arrives, so the orb keeps spinning the whole time.
+let orbThinkingCount=0, orbPendingState=null;
+function orbThinkingStart(){ orbThinkingCount++; setOrbState('processing','SARA THINKING'); }
+function orbThinkingEnd(){
+  orbThinkingCount=Math.max(0,orbThinkingCount-1);
+  if(!orbThinkingCount && orbPendingState){ const p=orbPendingState; orbPendingState=null; setOrbState(p[0],p[1]); }
+}
 function setOrbState(state, text){
+  if(orbThinkingCount>0 && state!=='processing' && state!=='speaking'){ orbPendingState=[state,text]; return; }
   const wrap=document.getElementById('commandOrbWrap');
   const label=document.getElementById('commandOrbStatus');
   if(wrap){ wrap.classList.remove('listening','processing','speaking'); if(state) wrap.classList.add(state); }
@@ -3681,15 +3691,15 @@ async function sendChatMessage(){
 
   // Animated dots + seconds counter until Sara answers; the orb spins meanwhile.
   const stopThinking = startThinking(thinking, 'Sara is thinking');
-  setOrbState('processing','SARA THINKING');
+  orbThinkingStart();
 
   try{
     const reply = await callHermes(text);
-    stopThinking(); restoreOrbIdle();
+    stopThinking(); orbThinkingEnd(); restoreOrbIdle();
     thinking.textContent = reply;
     document.getElementById('chatPanelBody').scrollTop = 999999;
   }catch(e){
-    stopThinking(); restoreOrbIdle();
+    stopThinking(); orbThinkingEnd(); restoreOrbIdle();
     thinking.remove();
     appendChatMsg('error', e.message || String(e));
     const fallback = await answerQuery(text);
@@ -3780,14 +3790,14 @@ function speak(text,remember=true){
     };
     u.onend=()=>{
       if(serial!==responseSpeechSerial)return;
-      clearTimeout(responseStartTimer);activeResponseUtterance=null;
+      clearTimeout(responseStartTimer);activeResponseUtterance=null;voiceSpeechEndedAt=Date.now();
       responseAudioStatus('Playback finished. Tap Play last response to hear it again.');
       setTimeout(recoverVoiceInput,300);
       setOrbState(wakeWordMode?'listening':'',wakeWordMode?(commandSessionActive?'COMMAND LISTENING ACTIVE':'HEY SARA STANDBY'):'OPERATIONS AI ONLINE');
     };
     u.onerror=e=>{
       if(serial!==responseSpeechSerial)return;
-      clearTimeout(responseStartTimer);activeResponseUtterance=null;
+      clearTimeout(responseStartTimer);activeResponseUtterance=null;voiceSpeechEndedAt=Date.now();
       setTimeout(recoverVoiceInput,300);
       responseAudioStatus('Audio could not play ('+(e.error||'unknown error')+'). Tap Play last response to retry directly.');
     };
@@ -4022,6 +4032,15 @@ const WAKE_COMMAND_TIMEOUT_MS = 10000;
 function normalizeWakeText(text){
   return (text||'').toLowerCase().replace(/[,.!?;:]/g,' ').replace(/\s+/g,' ').trim();
 }
+// Words that are NOT a real command: speech engines often add these right after
+// "Hey Sara" (or hear the assistant's own "Yes?"). They only open the listening window.
+const VOICE_FILLER=new Set(['yes','yeah','yep','yes please','ok','okay','hello','hi','hey','thank you','thanks',
+  'thank you very much','thanks for watching','you','um','uh','umm','hmm','mm','please','sara','sarah','saara',
+  'bye','right','sure','so','and','oh','yes sara','hi sara','hey sara']);
+function isVoiceFiller(text){ const n=normalizeWakeText(text); return !n || VOICE_FILLER.has(n); }
+// Ignore what the microphone hears while (and just after) the assistant itself speaks.
+let voiceSpeechEndedAt=0;
+function assistantJustSpoke(){ return !!window.speechSynthesis?.speaking || Date.now()-voiceSpeechEndedAt<1500; }
 function stripWakeWord(text){
   const n=normalizeWakeText(text);
   const match=/^(?:hey|hi)\s+(?:saara|sara|sarah)\b/.exec(n);
@@ -4062,9 +4081,10 @@ function gateWakeTranscript(transcript){
     commandSessionActive=true;
     commandSessionStarted=true;
     refreshCommandTimeout(); // Only a wake phrase opens a fresh ten-second window.
-    return afterWake ? {kind:'command',command:afterWake} : {kind:'wake'};
+    return (afterWake && !isVoiceFiller(afterWake)) ? {kind:'command',command:afterWake} : {kind:'wake'};
   }
   if(commandSessionActive && Date.now()<wakeCommandDeadline && transcript.trim()){
+    if(isVoiceFiller(transcript)) return {kind:'filler'};
     return {kind:'command',command:transcript.trim()};
   }
   return {kind:'ignore'};
@@ -4260,7 +4280,7 @@ function initVoice(engineOverride){
   recognizer.onresult = async (event)=>{
     if(!currentUser || !wakeWordMode) return;
     const commandAuthEpoch=voiceAuthEpoch;
-    if(window.speechSynthesis?.speaking) return;
+    if(assistantJustSpoke()) return;   // don't treat Sara's own voice ("Yes?") as a command
     voiceRetryDelay=500;
     const changedResults=Array.from(event.results).slice(event.resultIndex || 0);
     const interim=changedResults.filter(r=>!r.isFinal).map(r=>r[0].transcript).join(' ').trim();
@@ -4285,6 +4305,10 @@ function initVoice(engineOverride){
       voiceHeard.textContent='Standby — listening for Hey Sara';
       return;
     }
+    if(gated.kind==='filler'){
+      showVoiceTranscript(transcript,'Ignored — not a command (still listening)',true);
+      return;
+    }
     if(gated.kind==='wake'){
       showVoiceTranscript(transcript,'Wake phrase detected — 10-second window opened',true);
       armWakeCommandWindow();
@@ -4304,9 +4328,9 @@ function initVoice(engineOverride){
     }
 
     voiceBusy=true;
-    setOrbState('processing','SARA THINKING');
+    orbThinkingStart();
     const stopVoiceThinking = startThinking(voiceAnswer, 'Sara is thinking');
-    const wakeTimer = { stop: stopVoiceThinking };
+    const wakeTimer = { stop: ()=>{ stopVoiceThinking(); orbThinkingEnd(); } };
     let answer;
     try{
       try{ answer = await callHermes(command, commandAuthEpoch); }
@@ -4321,7 +4345,7 @@ function initVoice(engineOverride){
     voiceAnswer.textContent = answer;
     setOrbState('speaking','AZZURRO RESPONDING');
     speak(answer);
-    setTimeout(()=>setOrbState('', wakeWordMode?(commandSessionActive?'COMMAND LISTENING ACTIVE':'HEY SARA READY'):'OPERATIONS AI ONLINE'),1200);
+    setTimeout(()=>{ if(!window.speechSynthesis?.speaking) setOrbState('', wakeWordMode?(commandSessionActive?'COMMAND LISTENING ACTIVE':'HEY SARA READY'):'OPERATIONS AI ONLINE'); },1200);
   };
 
   // The microphone and ORB are one true on/off toggle. Starting still enters
