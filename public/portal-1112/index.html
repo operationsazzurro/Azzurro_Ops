@@ -592,7 +592,9 @@ button,[role="button"],.mic-btn{touch-action:manipulation}
     <div id="voiceEngineStatus" role="status" aria-live="polite" style="margin-top:8px;font-size:12px">Local recognition downloads a model on first use. No installation or API key. Keep this tab open; wait for “Listening”.</div>
     <label for="ttsVoice" style="display:block;margin-top:12px">Assistant voice</label>
     <select id="ttsVoice" style="width:100%;padding:8px;background:#11233a;color:white;border:1px solid #55718d;border-radius:6px"><option>Loading voices…</option></select>
-    <div style="font-size:11px;margin-top:4px">♀ = likely female. Your choice is saved on this device.</div>
+    <label for="ttsVoiceSam" style="display:block;margin-top:10px">SAM's voice</label>
+    <select id="ttsVoiceSam" style="width:100%;padding:8px;background:#11233a;color:white;border:1px solid #55718d;border-radius:6px"><option>Loading voices…</option></select>
+    <div style="font-size:11px;margin-top:4px">♀ = likely female, ♂ = likely male. Your choices are saved on this device.</div>
   </div>
   <div class="mic-btn" id="chatToggleBtn" title="Chat with Sara" style="background:radial-gradient(circle at 35% 30%, rgba(120,150,255,0.35), rgba(120,150,255,0.08)); border-color:rgba(120,150,255,0.4);">
     <svg viewBox="0 0 24 24" fill="none" stroke="#a8c0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -3753,14 +3755,42 @@ function pickAssistantVoice(voices){
   const en=voices.filter(v=>/^en[-_]/i.test(v.lang));
   return en.find(v=>isLikelyFemaleVoice(v)&&v.localService) || en.find(isLikelyFemaleVoice) || en.find(v=>v.localService) || en[0] || null;
 }
+// ---------- Other Bots' voices (SAM speaks with a male voice) ----------
+const MALE_VOICE_HINTS=['male','david','mark','guy','ryan','george','james','daniel','alex','fred','arthur','oliver',
+  'thomas','aaron','rishi','christopher','eric','roger','steffan','william','brian','andrew','liam','connor','tom','gordon','lee'];
+function isLikelyMaleVoice(v){const n=(v.name||'').toLowerCase();return !isLikelyFemaleVoice(v) && MALE_VOICE_HINTS.some(h=>n.includes(h));}
+const BOT_VOICE_STYLE={ sam:'male' };            // add more Bots here, e.g. eva:'female'
+function pickBotVoice(voices, bot){
+  const key='voice_'+bot.toLowerCase();
+  let saved=null; try{saved=localStorage.getItem(key);}catch(e){}
+  if(saved){const v=voices.find(x=>x.name===saved); if(v) return v;}
+  const en=voices.filter(v=>/^en[-_]/i.test(v.lang));
+  const sara=pickAssistantVoice(voices);
+  const style=BOT_VOICE_STYLE[bot.toLowerCase()];
+  const want = style==='male' ? isLikelyMaleVoice : style==='female' ? isLikelyFemaleVoice : ()=>true;
+  return en.find(v=>want(v)&&v.localService&&v!==sara) || en.find(v=>want(v)&&v!==sara) || en.find(v=>v!==sara) || sara;
+}
+// Replies from other Bots arrive as "SAM: ..." - find who is speaking.
+function speakerOf(text){
+  const m=/^([A-Za-z][\w-]{0,31}):\s/.exec(text||'');
+  return (m && BOT_VOICE_STYLE[m[1].toLowerCase()]) ? m[1] : null;
+}
 function populateVoicePicker(){
   const sel=document.getElementById('ttsVoice'); if(!sel || !window.speechSynthesis) return;
   const all=window.speechSynthesis.getVoices(); const en=all.filter(v=>/^en[-_]/i.test(v.lang)); if(!en.length) return;
   const current=pickAssistantVoice(all);
   const sorted=[...en].sort((a,b)=>isLikelyFemaleVoice(b)-isLikelyFemaleVoice(a));
-  sel.innerHTML=sorted.map(v=>`<option value="${esc(v.name)}">${isLikelyFemaleVoice(v)?'♀ ':''}${esc(v.name)} (${esc(v.lang)})</option>`).join('');
+  sel.innerHTML=sorted.map(v=>`<option value="${esc(v.name)}">${isLikelyFemaleVoice(v)?'♀ ':isLikelyMaleVoice(v)?'♂ ':''}${esc(v.name)} (${esc(v.lang)})</option>`).join('');
   if(current) sel.value=current.name;
   sel.onchange=()=>{ try{localStorage.setItem('sara_voice',sel.value);}catch(e){} speak('Hi, this is Sara. This is my new voice.',false); };
+  const samSel=document.getElementById('ttsVoiceSam');
+  if(samSel){
+    const sam=pickBotVoice(all,'SAM');
+    const order=v=>isLikelyMaleVoice(v)?0:isLikelyFemaleVoice(v)?2:1;
+    samSel.innerHTML=[...en].sort((a,b)=>order(a)-order(b)).map(v=>`<option value="${esc(v.name)}">${isLikelyMaleVoice(v)?'♂ ':isLikelyFemaleVoice(v)?'♀ ':''}${esc(v.name)} (${esc(v.lang)})</option>`).join('');
+    if(sam) samSel.value=sam.name;
+    samSel.onchange=()=>{ try{localStorage.setItem('voice_sam',samSel.value);}catch(e){} speak('SAM: Hi, this is SAM, your timekeeper.',false); };
+  }
 }
 if(window.speechSynthesis){
   if(window.speechSynthesis.addEventListener) window.speechSynthesis.addEventListener('voiceschanged',populateVoicePicker);
@@ -3780,7 +3810,9 @@ function speak(text,remember=true){
     activeResponseUtterance=u; // Retain the utterance for the full playback lifetime.
     u.lang='en-US';u.volume=1;u.rate=1;u.pitch=1;
     const voices=synth.getVoices();
-    const voice=pickAssistantVoice(voices);
+    const who=speakerOf(clean);
+    const voice= who ? pickBotVoice(voices, who) : pickAssistantVoice(voices);
+    if(who) u.text=clean.replace(/^[A-Za-z][\w-]{0,31}:\s*/,'');   // say the answer, not "SAM colon"
     if(voice){u.voice=voice;u.lang=voice.lang;}
     u.onstart=()=>{
       if(serial!==responseSpeechSerial)return;
