@@ -170,6 +170,98 @@
   }
   .mic-btn svg{width:22px; height:22px; stroke:var(--cyan-bright); position:relative; z-index:2;}
   .mic-btn.listening{animation:pulse 1.4s ease-in-out infinite;}
+  /* ---- group button: one icon that opens mic / chat / live screen ---- */
+  .dock-wrap{position:relative; display:flex; flex-direction:column; align-items:center;}
+  .dock-group{position:absolute; bottom:66px; left:50%; transform:translate(-50%,12px) scale(.9); display:flex;
+    flex-direction:column; gap:10px; opacity:0; pointer-events:none; transition:opacity .18s ease, transform .18s ease;}
+  .dock-wrap.open .dock-group{opacity:1; pointer-events:auto; transform:translate(-50%,0) scale(1);}
+  .dock-main{background:radial-gradient(circle at 35% 30%, rgba(167,139,250,.38), rgba(94,234,212,.10)); border-color:rgba(167,139,250,.55);}
+  .dock-main svg{stroke:#d7ccff;}
+  .dock-main .dock-main-close{display:none}
+  .dock-wrap.open .dock-main .dock-main-open{display:none}
+  .dock-wrap.open .dock-main .dock-main-close{display:block}
+  .dock-live{background:radial-gradient(circle at 35% 30%, rgba(249,198,106,.32), rgba(249,198,106,.07)); border-color:rgba(249,198,106,.5);}
+  .dock-mic-dot{position:absolute; top:3px; left:3px; width:11px; height:11px; border-radius:50%; background:#3ddc84;
+    box-shadow:0 0 8px #3ddc84; display:none; z-index:3;}
+  .dock-wrap.mic-on .dock-mic-dot{display:block; animation:pulse-dot 1.2s ease-in-out infinite;}
+  .live-busy-dot{position:absolute; top:3px; right:3px; width:11px; height:11px; border-radius:50%; background:#f9c66a;
+    box-shadow:0 0 8px #f9c66a; display:none; z-index:3;}
+  .agents-busy .live-busy-dot, .dock-wrap.agents-busy #dockBusyDot{display:block; animation:pulse-dot .9s ease-in-out infinite;}
+
+  /* ---- Agents Live screen ---- */
+  .agents-live{position:fixed; right:22px; bottom:96px; width:min(900px,calc(100vw - 44px)); height:min(580px,calc(100vh - 130px));
+    z-index:60; display:none; flex-direction:column; border-radius:16px; overflow:hidden;
+    background:radial-gradient(ellipse at 30% 20%, rgba(56,189,248,.10), transparent 60%), rgba(6,10,18,.97);
+    border:1px solid var(--panel-border-strong); box-shadow:0 18px 60px rgba(0,0,0,.6); backdrop-filter:blur(16px);}
+  .agents-live.show{display:flex;}
+  .agents-live.al-max, .agents-live:fullscreen{right:0; bottom:0; top:0; left:0; width:100vw; height:100vh; border-radius:0;}
+  .al-head{display:flex; align-items:center; gap:12px; padding:10px 14px; border-bottom:1px solid var(--panel-border); flex-shrink:0;}
+  .al-title{font-family:'Space Grotesk',sans-serif; font-weight:600; color:var(--text-hi); font-size:14px;}
+  .al-status{display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--text-mid);}
+  .al-dot{width:8px; height:8px; border-radius:50%; background:var(--text-dim);}
+  .al-status.live .al-dot{background:#3ddc84; box-shadow:0 0 8px #3ddc84; animation:pulse-dot 1.6s infinite;}
+  .al-status.bad .al-dot{background:var(--red);}
+  .al-actions{margin-left:auto; display:flex; gap:4px;}
+  .al-actions .icon-btn{background:rgba(255,255,255,.05); border:1px solid var(--panel-border); color:var(--text-hi); border-radius:8px;
+    min-width:32px; min-height:30px; cursor:pointer;}
+  .al-stage{position:relative; flex:1; min-height:0; overflow:hidden;
+    background-image:linear-gradient(rgba(94,234,212,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(94,234,212,.05) 1px, transparent 1px);
+    background-size:32px 32px;}
+  .al-links{position:absolute; inset:0; width:100%; height:100%; pointer-events:none;}
+  .al-link{stroke:#f9c66a; stroke-width:2.5; stroke-dasharray:8 7; fill:none; animation:alDash .7s linear infinite; opacity:.9;
+    filter:drop-shadow(0 0 4px rgba(249,198,106,.6));}
+  .al-link.fade{transition:opacity 1.2s ease; opacity:0;}
+  @keyframes alDash{to{stroke-dashoffset:-30}}
+  .al-empty{position:absolute; left:50%; bottom:14px; transform:translateX(-50%); font-size:12px; color:var(--text-dim); text-align:center; width:90%;}
+  .al-node{position:absolute; transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center; gap:4px;
+    transition:left .6s ease, top .6s ease; text-align:center;}
+  .al-source{width:58px; height:58px; border-radius:14px; display:grid; place-items:center; font-size:26px;
+    background:rgba(255,255,255,.04); border:1px solid var(--panel-border); position:relative;}
+  .al-source-label{font-size:11px; color:var(--text-mid);}
+  .al-name{font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:13px; letter-spacing:.06em; color:var(--text-hi);
+    padding:2px 9px; border-radius:999px; background:rgba(255,255,255,.06); border:1px solid var(--panel-border); white-space:nowrap;}
+  .al-bot.main .al-name{background:rgba(94,234,212,.16); border-color:rgba(94,234,212,.5);}
+  .al-robot{width:86px; height:96px; animation:alFloat 3.2s ease-in-out infinite;}
+  .al-bot.main .al-robot{width:104px; height:116px;}
+  .al-robot .al-antenna-ball{transition:fill .3s;}
+  .al-robot .al-eye{transition:fill .3s; transform-box:fill-box; transform-origin:center;}
+  .al-robot .al-arm{transform-box:fill-box;}
+  .al-robot .al-arm-l{transform-origin:top right;} .al-robot .al-arm-r{transform-origin:top left;}
+  .al-bubble{font-size:11.5px; color:var(--text-hi); background:rgba(17,35,58,.92); border:1px solid var(--panel-border);
+    padding:4px 9px; border-radius:10px; max-width:190px; min-height:22px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    opacity:0; transform:translateY(-4px); transition:opacity .25s, transform .25s;}
+  .al-bot.has-bubble .al-bubble{opacity:1; transform:none;}
+  /* states */
+  .al-bot.thinking .al-antenna-ball{fill:#f9c66a; animation:alBlink .6s steps(2) infinite;}
+  .al-bot.thinking .al-eye{animation:alScan 1.2s ease-in-out infinite;}
+  .al-bot.working .al-robot{animation:alBounce .5s ease-in-out infinite alternate;}
+  .al-bot.working .al-arm-l{animation:alArmL .35s ease-in-out infinite alternate;}
+  .al-bot.working .al-arm-r{animation:alArmR .35s ease-in-out infinite alternate;}
+  .al-bot.working .al-antenna-ball{fill:#5eead4;}
+  .al-bot.waiting .al-antenna-ball{fill:#f97316; animation:alBlink 1s steps(2) infinite;}
+  .al-bot.waiting .al-robot{filter:drop-shadow(0 0 12px rgba(249,115,22,.55));}
+  .al-bot.done .al-robot{filter:drop-shadow(0 0 16px rgba(61,220,132,.8));}
+  .al-bot.done .al-eye{fill:#3ddc84;}
+  .al-bot.error .al-robot{filter:drop-shadow(0 0 14px rgba(255,107,129,.8));}
+  .al-bot.error .al-eye{fill:#ff6b81;}
+  .al-bot.thinking .al-robot, .al-bot.working .al-robot{filter:drop-shadow(0 0 14px var(--bot-glow,rgba(94,234,212,.6)));}
+  @keyframes alFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+  @keyframes alBounce{from{transform:translateY(0)}to{transform:translateY(-6px)}}
+  @keyframes alBlink{to{opacity:.25}}
+  @keyframes alScan{0%,100%{transform:translateX(-1.5px)}50%{transform:translateX(1.5px)}}
+  @keyframes alArmL{from{transform:rotate(8deg)}to{transform:rotate(-28deg)}}
+  @keyframes alArmR{from{transform:rotate(-8deg)}to{transform:rotate(28deg)}}
+  .al-packet{position:absolute; z-index:5; transform:translate(-50%,-50%); font-size:18px; width:34px; height:34px; border-radius:50%;
+    display:grid; place-items:center; background:rgba(17,35,58,.95); border:1px solid rgba(94,234,212,.6);
+    box-shadow:0 0 14px rgba(94,234,212,.55); pointer-events:none;}
+  .al-log{flex-shrink:0; height:96px; overflow:auto; border-top:1px solid var(--panel-border); padding:6px 12px;
+    font-size:11.5px; color:var(--text-mid); font-family:ui-monospace,Consolas,monospace; background:rgba(0,0,0,.25);}
+  .al-log div{padding:1px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .al-log b{color:var(--text-hi); font-weight:600;}
+  @media (max-width:720px){ .agents-live{right:8px; left:8px; bottom:84px; width:auto; height:min(520px,calc(100dvh - 110px));}
+    .al-robot{width:64px; height:72px;} .al-bot.main .al-robot{width:76px; height:86px;} .al-bubble{max-width:130px; font-size:10.5px;}
+    .al-source{width:44px; height:44px; font-size:20px;} .al-log{height:72px;} }
+  @media (prefers-reduced-motion:reduce){ .al-robot, .al-bot * {animation:none !important;} }
   .mic-btn.listening::after{
     content:""; position:absolute; inset:-8px; border-radius:50%; border:1px solid var(--cyan);
     animation:ring 1.4s ease-out infinite;
@@ -596,20 +688,57 @@ button,[role="button"],.mic-btn{touch-action:manipulation}
     <select id="ttsVoiceSam" style="width:100%;padding:8px;background:#11233a;color:white;border:1px solid #55718d;border-radius:6px"><option>Loading voices…</option></select>
     <div style="font-size:11px;margin-top:4px">♀ = likely female, ♂ = likely male. Your choices are saved on this device.</div>
   </div>
-  <div class="mic-btn" id="chatToggleBtn" title="Chat with Sara" style="background:radial-gradient(circle at 35% 30%, rgba(120,150,255,0.35), rgba(120,150,255,0.08)); border-color:rgba(120,150,255,0.4);">
-    <svg viewBox="0 0 24 24" fill="none" stroke="#a8c0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
-    </svg>
-    <span class="hermes-status-dot" id="hermesStatusDot" title="Hermes status: unknown"></span>
+  <div class="dock-wrap" id="dockWrap">
+    <div class="dock-group" id="dockGroup" aria-hidden="true">
+      <div class="mic-btn dock-live" id="liveBtn" title="Agents live screen" role="button" tabindex="0" aria-label="Open agents live screen" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#f9c66a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+          <polyline points="6 12 9 9 12 11 17 6"/>
+        </svg>
+        <span class="live-busy-dot" id="liveBusyDot"></span>
+      </div>
+    <div class="mic-btn" id="chatToggleBtn" title="Chat with Sara" style="background:radial-gradient(circle at 35% 30%, rgba(120,150,255,0.35), rgba(120,150,255,0.08)); border-color:rgba(120,150,255,0.4);">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#a8c0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+      </svg>
+      <span class="hermes-status-dot" id="hermesStatusDot" title="Hermes status: unknown"></span>
+    </div>
+    <div class="mic-btn" id="micBtn" title="Ask by voice">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+        <line x1="12" y1="19" x2="12" y2="23"/>
+        <line x1="8" y1="23" x2="16" y2="23"/>
+      </svg>
+    </div>
+    </div>
+    <div class="mic-btn dock-main" id="dockMainBtn" title="Assistant tools" role="button" tabindex="0" aria-label="Show assistant tools" aria-expanded="false">
+      <svg class="dock-main-open" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="7" r="3"/><circle cx="5.5" cy="16" r="2.6"/><circle cx="18.5" cy="16" r="2.6"/>
+        <path d="M10.4 9.6 7 13.7M13.6 9.6 17 13.7M8.1 16h7.8"/>
+      </svg>
+      <svg class="dock-main-close" viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      <span class="dock-mic-dot" id="dockMicDot" title="Microphone listening"></span>
+      <span class="live-busy-dot" id="dockBusyDot"></span>
+    </div>
   </div>
-  <div class="mic-btn" id="micBtn" title="Ask by voice">
-    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-      <line x1="12" y1="19" x2="12" y2="23"/>
-      <line x1="8" y1="23" x2="16" y2="23"/>
-    </svg>
+</div>
+
+<!-- Agents Live: animated view of what the AI agents are doing right now (admins only) -->
+<div class="agents-live" id="agentsLive" role="dialog" aria-label="Agents live" aria-hidden="true">
+  <div class="al-head">
+    <span class="al-title">🤖 Agents · Live</span>
+    <span class="al-status" id="alStatus"><span class="al-dot"></span><span id="alStatusText">Not connected</span></span>
+    <span class="al-actions">
+      <button class="icon-btn" id="alFullBtn" title="Full screen" aria-label="Full screen">⛶</button>
+      <button class="icon-btn" id="alCloseBtn" title="Close" aria-label="Close">✕</button>
+    </span>
   </div>
+  <div class="al-stage" id="alStage">
+    <svg class="al-links" id="alLinks" preserveAspectRatio="none"></svg>
+    <div class="al-empty" id="alEmpty">Waiting for the agents… Send a task in Telegram or ask Sara here, and watch them work.</div>
+  </div>
+  <div class="al-log" id="alLog" aria-live="polite"></div>
 </div>
 
 <div class="hermes-settings-modal" id="hermesSettingsModal">
@@ -4463,6 +4592,7 @@ function updateUserBadge(){
     logoutBtn.style.display = 'none';
     loginNavBtn.style.display = 'inline-flex';
   }
+  if(typeof syncAgentsLive==='function') syncAgentsLive();   // Agents Live: admins only
 }
 
 async function bootGuest(){
@@ -4525,6 +4655,235 @@ document.getElementById('logoutBtn').onclick = async ()=>{
   renderTabs();
   renderContent();
 };
+
+// ---------- Agents Live screen (admins only) ----------
+// Listens to the bot server's /v1/events stream (same URL + key as the chat ⚙ settings)
+// ONLY while this page is open and an admin is signed in. Nothing is stored.
+const AL_COLORS=['#5eead4','#a78bfa','#f9c66a','#60a5fa','#f472b6','#34d399','#fb923c','#c084fc'];
+const AL_SOURCES={telegram:{icon:'✈️',label:'Telegram'}, app:{icon:'🖥',label:'Ops App'}, system:{icon:'⏰',label:'Schedule'}};
+const AL={bots:{}, main:'Sara', abort:null, connected:false, retry:3000, srcOf:{}, busy:new Set(), idleTimers:{}, wantConnect:false};
+
+function alRobotSVG(color){
+  return `<svg class="al-robot" viewBox="0 0 100 112" aria-hidden="true">
+    <line x1="50" y1="6" x2="50" y2="20" stroke="${color}" stroke-width="3"/>
+    <circle class="al-antenna-ball" cx="50" cy="6" r="5" fill="${color}"/>
+    <rect x="20" y="20" width="60" height="44" rx="14" fill="#0f2238" stroke="${color}" stroke-width="3"/>
+    <rect x="28" y="30" width="44" height="24" rx="9" fill="#06101d"/>
+    <circle class="al-eye" cx="40" cy="42" r="5" fill="${color}"/>
+    <circle class="al-eye" cx="60" cy="42" r="5" fill="${color}"/>
+    <rect x="14" y="36" width="6" height="14" rx="3" fill="${color}" opacity=".7"/>
+    <rect x="80" y="36" width="6" height="14" rx="3" fill="${color}" opacity=".7"/>
+    <rect x="30" y="68" width="40" height="32" rx="10" fill="#0f2238" stroke="${color}" stroke-width="3"/>
+    <circle cx="50" cy="83" r="5" fill="${color}" opacity=".85"/>
+    <rect class="al-arm al-arm-l" x="16" y="70" width="12" height="24" rx="6" fill="#0f2238" stroke="${color}" stroke-width="2.5"/>
+    <rect class="al-arm al-arm-r" x="72" y="70" width="12" height="24" rx="6" fill="#0f2238" stroke="${color}" stroke-width="2.5"/>
+    <rect x="36" y="100" width="10" height="10" rx="3" fill="${color}" opacity=".6"/>
+    <rect x="54" y="100" width="10" height="10" rx="3" fill="${color}" opacity=".6"/>
+  </svg>`;
+}
+function alStage(){ return document.getElementById('alStage'); }
+function alEnsureSources(){
+  const st=alStage(); if(!st || st.querySelector('.al-source')) return;
+  Object.entries(AL_SOURCES).forEach(([key,v])=>{
+    const n=document.createElement('div'); n.className='al-node al-src'; n.dataset.src=key;
+    n.innerHTML=`<div class="al-source">${v.icon}</div><div class="al-source-label">${v.label}</div>`;
+    st.appendChild(n);
+  });
+}
+function alAddBot(name){
+  const key=name.toLowerCase(); if(AL.bots[key]) return AL.bots[key];
+  const st=alStage(); const color=AL_COLORS[Object.keys(AL.bots).length % AL_COLORS.length];
+  const el=document.createElement('div'); el.className='al-node al-bot'; el.dataset.bot=key;
+  el.style.setProperty('--bot-glow', color+'aa');
+  el.innerHTML=`<div class="al-name">${esc(name)}</div>${alRobotSVG(color)}<div class="al-bubble"></div>`;
+  st.appendChild(el);
+  AL.bots[key]={name, el, color};
+  alLayout();
+  return AL.bots[key];
+}
+// Sources on the left, the main agent (Sara) in the middle, teammates in an arc on the right.
+function alLayout(){
+  alEnsureSources();
+  const st=alStage(); if(!st) return;
+  const srcs=[...st.querySelectorAll('.al-src')];
+  srcs.forEach((n,i)=>{ n.style.left='9%'; n.style.top=((i+1)/(srcs.length+1)*100)+'%'; });
+  const mainKey=AL.main.toLowerCase();
+  const others=Object.keys(AL.bots).filter(k=>k!==mainKey);
+  if(AL.bots[mainKey]){ const m=AL.bots[mainKey].el; m.classList.add('main'); m.style.left='38%'; m.style.top='50%'; }
+  // Two staggered columns so name tags and step bubbles never collide.
+  const n=others.length;
+  others.forEach((k,i)=>{
+    const x = n<=2 ? 74 : (i%2 ? 86 : 64);
+    const y = n===1 ? 50 : (i+1)/(n+1)*100;
+    AL.bots[k].el.style.left=x+'%';
+    AL.bots[k].el.style.top=y+'%';
+  });
+  const empty=document.getElementById('alEmpty');
+  if(empty) empty.style.display=(Object.keys(AL.bots).length && AL.started)?'none':'block';
+}
+function alCenter(el){
+  const st=alStage().getBoundingClientRect(), r=(el.querySelector('.al-robot,.al-source')||el).getBoundingClientRect();
+  return {x:r.left-st.left+r.width/2, y:r.top-st.top+r.height/2};
+}
+function alNodeFor(name){ const b=AL.bots[(name||'').toLowerCase()]; return b ? b.el : null; }
+function alSourceNode(src){ return alStage().querySelector(`.al-src[data-src="${src||'system'}"]`); }
+function alPacket(fromEl, toEl, icon, ms=900){
+  if(!fromEl || !toEl || !document.getElementById('agentsLive').classList.contains('show')) return;
+  const a=alCenter(fromEl), b=alCenter(toEl);
+  const p=document.createElement('div'); p.className='al-packet'; p.textContent=icon;
+  alStage().appendChild(p);
+  const mid={x:(a.x+b.x)/2, y:Math.min(a.y,b.y)-40};
+  const anim=p.animate([{left:a.x+'px',top:a.y+'px',opacity:0,transform:'translate(-50%,-50%) scale(.6)'},
+                        {left:mid.x+'px',top:mid.y+'px',opacity:1,transform:'translate(-50%,-50%) scale(1.1)',offset:.5},
+                        {left:b.x+'px',top:b.y+'px',opacity:.9,transform:'translate(-50%,-50%) scale(.8)'}],
+                       {duration:ms, easing:'ease-in-out'});
+  anim.onfinish=()=>p.remove();
+}
+function alLink(fromName, toName){
+  const f=alNodeFor(fromName), t=alNodeFor(toName); if(!f||!t) return;
+  const svg=document.getElementById('alLinks'), a=alCenter(f), b=alCenter(t);
+  const id='lk-'+fromName.toLowerCase()+'-'+toName.toLowerCase();
+  svg.querySelector('#'+CSS.escape(id))?.remove();
+  const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+  path.setAttribute('id',id); path.setAttribute('class','al-link');
+  path.setAttribute('d',`M${a.x},${a.y} Q${(a.x+b.x)/2},${Math.min(a.y,b.y)-60} ${b.x},${b.y}`);
+  svg.appendChild(path);
+}
+function alUnlink(fromName, toName){
+  const p=document.getElementById('lk-'+(fromName||'').toLowerCase()+'-'+(toName||'').toLowerCase());
+  if(p){ p.classList.add('fade'); setTimeout(()=>p.remove(),1300); }
+}
+function alSetState(name, state, bubble){
+  const b=alAddBot(name), el=b.el, key=name.toLowerCase();
+  clearTimeout(AL.idleTimers[key]);
+  el.classList.remove('thinking','working','waiting','done','error');
+  if(state && state!=='idle') el.classList.add(state);
+  const bub=el.querySelector('.al-bubble');
+  if(bubble){ bub.textContent=bubble; el.classList.add('has-bubble'); } else if(state==='idle'){ el.classList.remove('has-bubble'); }
+  if(state==='done' || state==='error'){ AL.busy.delete(key); AL.idleTimers[key]=setTimeout(()=>alSetState(name,'idle'),3500); }
+  else if(state==='idle'){ AL.busy.delete(key); }
+  else { AL.busy.add(key); }
+  alBusyIndicator();
+}
+function alBusyIndicator(){
+  const busy=AL.busy.size>0;
+  document.getElementById('dockWrap')?.classList.toggle('agents-busy',busy);
+  document.getElementById('liveBtn')?.classList.toggle('agents-busy',busy);
+}
+function alLog(html){
+  const log=document.getElementById('alLog'); if(!log) return;
+  const d=document.createElement('div');
+  d.innerHTML=`<span style="opacity:.6">${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span> · ${html}`;
+  log.prepend(d); while(log.children.length>40) log.lastChild.remove();
+}
+function alHandle(ev){
+  const b=ev.bot||'', B=`<b>${esc(b)}</b>`;
+  switch(ev.type){
+    case 'hello':
+      AL.main=ev.main||'Sara';
+      (ev.bots||[]).forEach(x=>{ alAddBot(x.name); if(x.busy) alSetState(x.name,'working','⚙️ working'); });
+      alLayout(); alLog('connected to the agent team'); break;
+    case 'task_start':
+      if(!AL.started){ AL.started=true; const e=document.getElementById('alEmpty'); if(e) e.style.display='none'; }
+      if(!ev.depth){ AL.srcOf[b.toLowerCase()]=ev.source; alPacket(alSourceNode(ev.source), alAddBot(b).el, '📨'); }
+      alSetState(b,'thinking','📥 new task');
+      alLog(ev.depth ? `${B} picked up the hand-off from <b>${esc(ev.by)}</b>` : `${B} got a task from ${AL_SOURCES[ev.source]?.label||'system'}`); break;
+    case 'thinking':
+      alSetState(b,'thinking','💭 thinking…'); break;
+    case 'step':
+      alSetState(b,'working',ev.label||'⚙️ working'); if(ev.tool!=='routine_step' || /step 1\//.test(ev.label||'')) alLog(`${B} ${esc(ev.label||'')}`); break;
+    case 'handoff':
+      alAddBot(ev.to); alLink(b, ev.to); alPacket(alNodeFor(b), alNodeFor(ev.to), '🤝');
+      alSetState(b,'waiting',`🤝 asked ${ev.to}`); alLog(`${B} → <b>${esc(ev.to)}</b> 🤝 hand-off`); break;
+    case 'approval':
+      if(ev.state==='waiting'){ alSetState(b,'waiting','⏳ waiting for your OK'); alLog(`${B} is waiting for your approval`); }
+      else alSetState(b,'thinking','💭 continuing…'); break;
+    case 'task_done': {
+      const ok=ev.status==='done';
+      if(ev.to){ alPacket(alNodeFor(b), alNodeFor(ev.to), ok?'✅':'⚠️'); alUnlink(ev.to, b); alSetState(ev.to,'thinking','💭 using the result'); }
+      else alPacket(alNodeFor(b), alSourceNode(AL.srcOf[b.toLowerCase()]), ok?'✅':'⚠️');
+      alSetState(b, ok?'done':'error', ok?`✅ done · ${ev.secs}s`:`⚠️ ${ev.status}`);
+      alLog(`${B} ${ok?'finished':'stopped ('+esc(ev.status)+')'} in ${ev.secs}s` + (ev.to?` → back to <b>${esc(ev.to)}</b>`:'')); break; }
+  }
+}
+function alStatus(text, cls){
+  const st=document.getElementById('alStatus'); if(!st) return;
+  st.className='al-status '+(cls||''); document.getElementById('alStatusText').textContent=text;
+}
+async function alConnect(){
+  if(AL.abort || !AL.wantConnect) return;
+  const cfg=getHermesConfig();
+  if(!cfg || !cfg.url){ alStatus('Bot server not set up (chat ⚙)','bad'); return; }
+  const ctrl=new AbortController(); AL.abort=ctrl;
+  alStatus('Connecting…');
+  try{
+    const res=await fetch(cfg.url.replace(/\/$/,'')+'/v1/events',{headers: cfg.key?{'Authorization':'Bearer '+cfg.key}:{}, signal:ctrl.signal, cache:'no-store'});
+    if(!res.ok || !res.body) throw new Error('HTTP '+res.status);
+    AL.connected=true; AL.retry=3000; alStatus('Live','live');
+    const reader=res.body.getReader(), dec=new TextDecoder(); let buf='';
+    for(;;){
+      const {value, done}=await reader.read(); if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      let i; while((i=buf.indexOf('\n\n'))>=0){
+        const block=buf.slice(0,i); buf=buf.slice(i+2);
+        block.split('\n').forEach(line=>{ if(line.startsWith('data: ')){ try{ alHandle(JSON.parse(line.slice(6))); }catch(e){} } });
+      }
+    }
+    throw new Error('stream ended');
+  }catch(e){
+    AL.connected=false; AL.abort=null;
+    if(ctrl.signal.aborted || !AL.wantConnect){ alStatus('Not connected'); return; }
+    alStatus('Reconnecting… ('+(e.message||e)+')','bad');
+    setTimeout(alConnect, AL.retry); AL.retry=Math.min(AL.retry*2, 30000);
+  }
+}
+function alDisconnect(){ AL.wantConnect=false; if(AL.abort){ AL.abort.abort(); AL.abort=null; } AL.busy.clear(); alBusyIndicator(); }
+// Called on sign-in / sign-out / role change: only admins get the screen (and the feed).
+function syncAgentsLive(){
+  const admin=!!currentUser && isAdmin();
+  const btn=document.getElementById('liveBtn'); if(btn) btn.style.display=admin?'flex':'none';
+  if(admin){ if(!AL.wantConnect){ AL.wantConnect=true; alConnect(); } }
+  else { alDisconnect(); closeAgentsLive(); }
+}
+function openAgentsLive(){
+  if(!(currentUser && isAdmin())) return;
+  const p=document.getElementById('agentsLive'); p.classList.add('show'); p.setAttribute('aria-hidden','false');
+  alLayout(); if(!AL.wantConnect){ AL.wantConnect=true; alConnect(); }
+}
+function closeAgentsLive(){
+  const p=document.getElementById('agentsLive'); if(!p) return;
+  if(document.fullscreenElement===p) document.exitFullscreen?.();
+  p.classList.remove('show','al-max'); p.setAttribute('aria-hidden','true');
+}
+(function initAgentsLive(){
+  const btn=document.getElementById('liveBtn'); if(!btn) return;
+  btn.onclick=openAgentsLive;
+  btn.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openAgentsLive(); } };
+  document.getElementById('alCloseBtn').onclick=closeAgentsLive;
+  document.getElementById('alFullBtn').onclick=()=>{
+    const p=document.getElementById('agentsLive');
+    if(document.fullscreenElement===p){ document.exitFullscreen(); return; }
+    if(p.requestFullscreen) p.requestFullscreen().catch(()=>p.classList.toggle('al-max'));
+    else p.classList.toggle('al-max');            // iPhone Safari: fill the window instead
+  };
+  window.addEventListener('resize',()=>alLayout());
+})();
+
+// ---------- group button (mic + chat + live screen) ----------
+(function initDockGroup(){
+  const wrap=document.getElementById('dockWrap'), main=document.getElementById('dockMainBtn');
+  if(!wrap || !main) return;
+  const setOpen=(open)=>{ wrap.classList.toggle('open',open); main.setAttribute('aria-expanded',String(open));
+    document.getElementById('dockGroup').setAttribute('aria-hidden',String(!open)); };
+  main.onclick=()=>setOpen(!wrap.classList.contains('open'));
+  main.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); main.click(); } };
+  // choosing chat or the live screen tucks the group away again (mic stays, so you can see it listening)
+  ['chatToggleBtn','liveBtn'].forEach(id=>document.getElementById(id)?.addEventListener('click',()=>setOpen(false)));
+  // show a green dot on the group icon while the microphone is listening, even when closed
+  const mic=document.getElementById('micBtn');
+  const sync=()=>wrap.classList.toggle('mic-on', mic.classList.contains('listening'));
+  new MutationObserver(sync).observe(mic,{attributes:true,attributeFilter:['class']}); sync();
+})();
 
 for(const [id,label] of [['micBtn','Voice command standby or activate'],['chatToggleBtn','Open Hermes chat']]){
   const control=document.getElementById(id);control.setAttribute('role','button');control.setAttribute('tabindex','0');control.setAttribute('aria-label',label);
