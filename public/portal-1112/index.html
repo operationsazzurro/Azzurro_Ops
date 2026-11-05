@@ -231,6 +231,11 @@
     padding:4px 9px; border-radius:10px; max-width:190px; min-height:22px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
     opacity:0; transform:translateY(-4px); transition:opacity .25s, transform .25s;}
   .al-bot.has-bubble .al-bubble{opacity:1; transform:none;}
+  /* bubble floats under the robot; on the right-hand column it grows leftwards so it never gets cut off */
+  .al-bot .al-bubble{position:absolute; top:100%; margin-top:4px; left:50%; translate:-50% 0; z-index:5;}
+  .al-bot.has-bubble{z-index:4;} .al-bot.has-bubble .al-bubble{background:#11233a;}
+  .al-bot.edge-r .al-bubble{left:auto; right:-4px; translate:none;}
+  @media (max-width:640px){ .al-bot.edge-r .al-bubble{max-width:38vw;} }
   /* states */
   .al-bot.thinking .al-antenna-ball{fill:#f9c66a; animation:alBlink .6s steps(2) infinite;}
   .al-bot.thinking .al-eye{animation:alScan 1.2s ease-in-out infinite;}
@@ -4717,6 +4722,7 @@ function alLayout(){
     const y = n===1 ? 50 : (i+1)/(n+1)*100;
     AL.bots[k].el.style.left=x+'%';
     AL.bots[k].el.style.top=y+'%';
+    AL.bots[k].el.classList.toggle('edge-r', x>=80);
   });
   const empty=document.getElementById('alEmpty');
   if(empty) empty.style.display=(Object.keys(AL.bots).length && AL.started)?'none':'block';
@@ -4810,33 +4816,89 @@ function alStatus(text, cls){
   const st=document.getElementById('alStatus'); if(!st) return;
   st.className='al-status '+(cls||''); document.getElementById('alStatusText').textContent=text;
 }
+// Live feed. Tries a streaming connection first; phones / mobile networks that hold
+// streams back get switched to quick polling automatically ("phone mode").
+function alBase(){ const c=getHermesConfig(); return c && c.url ? {url:c.url.replace(/\/$/,''), key:c.key||''} : null; }
+function alHeaders(cfg){ return cfg.key ? {'Authorization':'Bearer '+cfg.key} : {}; }
+function alFeed(ev){ if(ev && typeof ev.seq==='number') AL.seq=Math.max(AL.seq||0, ev.seq); if(ev && ev.type!=='ping') alHandle(ev); }
 async function alConnect(){
-  if(AL.abort || !AL.wantConnect) return;
-  const cfg=getHermesConfig();
-  if(!cfg || !cfg.url){ alStatus('Bot server not set up (chat ⚙)','bad'); return; }
+  if(AL.abort || AL.polling || !AL.wantConnect) return;
+  const cfg=alBase();
+  if(!cfg){ alStatus('Bot server not set up (chat ⚙)','bad'); return; }
+  if(AL.mode==='poll') return alPollLoop();
   const ctrl=new AbortController(); AL.abort=ctrl;
   alStatus('Connecting…');
+  let why='';
+  const kill=(r)=>{ why=r; try{ ctrl.abort(); }catch(e){} };
+  let watchdog=setTimeout(()=>kill('timeout'), 12000);          // no answer in 12 s
   try{
-    const res=await fetch(cfg.url.replace(/\/$/,'')+'/v1/events',{headers: cfg.key?{'Authorization':'Bearer '+cfg.key}:{}, signal:ctrl.signal, cache:'no-store'});
+    const res=await fetch(cfg.url+'/v1/events',{headers:alHeaders(cfg), signal:ctrl.signal, cache:'no-store'});
     if(!res.ok || !res.body) throw new Error('HTTP '+res.status);
-    AL.connected=true; AL.retry=3000; alStatus('Live','live');
+    clearTimeout(watchdog); watchdog=setTimeout(()=>kill('timeout'), 10000);   // first data in 10 s
     const reader=res.body.getReader(), dec=new TextDecoder(); let buf='';
     for(;;){
       const {value, done}=await reader.read(); if(done) break;
+      AL.lastData=Date.now();
+      clearTimeout(watchdog); watchdog=setTimeout(()=>kill('stale'), 45000);   // server pings every 15 s
       buf+=dec.decode(value,{stream:true});
       let i; while((i=buf.indexOf('\n\n'))>=0){
         const block=buf.slice(0,i); buf=buf.slice(i+2);
-        block.split('\n').forEach(line=>{ if(line.startsWith('data: ')){ try{ alHandle(JSON.parse(line.slice(6))); }catch(e){} } });
+        block.split('\n').forEach(line=>{ if(line.startsWith('data: ')){ try{
+          const ev=JSON.parse(line.slice(6));
+          if(ev.type==='hello'){ AL.connected=true; AL.retry=3000; AL.streamFails=0; alStatus('Live','live'); }
+          alFeed(ev);
+        }catch(e){} } });
       }
     }
     throw new Error('stream ended');
   }catch(e){
-    AL.connected=false; AL.abort=null;
-    if(ctrl.signal.aborted || !AL.wantConnect){ alStatus('Not connected'); return; }
-    alStatus('Reconnecting… ('+(e.message||e)+')','bad');
+    clearTimeout(watchdog);
+    const wasLive=AL.connected; AL.connected=false; AL.abort=null;
+    if(!AL.wantConnect){ alStatus('Not connected'); return; }
+    if(/HTTP 401/.test(e.message)){ alStatus('Wrong API Server Key (chat ⚙)','bad'); return; }
+    if(why==='wake'){ return alConnect(); }
+    // Stream never got through (typical on mobile data / some phone browsers) -> phone mode.
+    if(!wasLive){ AL.streamFails=(AL.streamFails||0)+1; }
+    if(!wasLive && (why==='timeout' || AL.streamFails>=2)){ AL.mode='poll'; return alPollLoop(); }
+    alStatus('Reconnecting… ('+(why||e.message||e)+')','bad');
     setTimeout(alConnect, AL.retry); AL.retry=Math.min(AL.retry*2, 30000);
   }
 }
+async function alPollLoop(){
+  if(AL.polling) return; AL.polling=true; AL.seq=0;
+  alStatus('Connecting… (phone mode)');
+  let fails=0, needHello=true;
+  while(AL.wantConnect && AL.mode==='poll'){
+    if(document.hidden){ await new Promise(r=>setTimeout(r,1500)); continue; }   // save battery in background
+    const cfg=alBase(); if(!cfg){ alStatus('Bot server not set up (chat ⚙)','bad'); break; }
+    try{
+      const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(), 10000);
+      const res=await fetch(cfg.url+'/v1/events?poll=1&since='+(AL.seq||0)+(needHello?'&hello=1':''),{headers:alHeaders(cfg), signal:ctrl.signal, cache:'no-store'});
+      clearTimeout(t);
+      if(res.status===401){ alStatus('Wrong API Server Key (chat ⚙)','bad'); break; }
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const data=await res.json(); fails=0;
+      if(data.hello){ alFeed(data.hello); needHello=false; }
+      if(!AL.connected){ AL.connected=true; alStatus('Live','live'); }
+      if(typeof data.seq==='number' && data.seq<(AL.seq||0)){ AL.seq=0; needHello=true; }   // server restarted
+      for(const ev of (data.events||[])){ alFeed(ev); await new Promise(r=>setTimeout(r,250)); }  // replay so you can follow it
+      if(typeof data.seq==='number') AL.seq=Math.max(AL.seq||0, data.seq);
+    }catch(e){
+      AL.connected=false; fails++;
+      alStatus('Reconnecting… ('+(e.name==='AbortError'?'timeout':(e.message||e))+')','bad');
+      await new Promise(r=>setTimeout(r, Math.min(2000*fails, 15000))); continue;
+    }
+    await new Promise(r=>setTimeout(r,2000));
+  }
+  AL.polling=false; AL.connected=false;
+  if(!AL.wantConnect) alStatus('Not connected');
+}
+// Phones freeze background tabs: when you come back, check the feed and reconnect if it went quiet.
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden || !AL.wantConnect || AL.mode==='poll') return;
+  if(AL.abort && AL.connected && Date.now()-(AL.lastData||0) > 20000){ try{ AL.abort.abort(); }catch(e){} }
+  else if(!AL.abort){ AL.retry=3000; alConnect(); }
+});
 function alDisconnect(){ AL.wantConnect=false; if(AL.abort){ AL.abort.abort(); AL.abort=null; } AL.busy.clear(); alBusyIndicator(); }
 // Called on sign-in / sign-out / role change: only admins get the screen (and the feed).
 function syncAgentsLive(){
