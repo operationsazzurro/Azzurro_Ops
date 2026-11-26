@@ -830,6 +830,7 @@ const TABS = [
   { id:'sites', label:'Sites' },
   { id:'staff', label:'Staff' },
   { id:'invoices', label:'Invoice & WCR' },
+  { id:'invtracker', label:'Invoice Tracker' },
   { id:'kpi', label:'KPI' },
   { id:'visits', label:'Manager Visits' },
   { id:'complaints', label:'Complaints' },
@@ -945,6 +946,7 @@ function commandNavigate(raw){
     [/\b(contract|contracts|project|projects|projects and contracts)\b/,'contracts'],
     [/\bsite(s)?\b/,'sites'],
     [/\b(staff|manpower|employees?)\b/,'staff'],
+    [/\b(invoice tracker|tracker|acknowledge?ments?|ack copies)\b/,'invtracker'],
     [/\b(invoice|invoices|wcr|invoice and wcr)\b/,'invoices'],
     [/\bkpi(s)?\b/,'kpi'],
     [/\b(visit|visits|manager visit|manager visits)\b/,'visits'],
@@ -993,6 +995,7 @@ async function renderContent(){
     else if(currentTab==='sites') await renderSites(el);
     else if(currentTab==='staff') await renderStaff(el);
     else if(currentTab==='invoices') await renderInvoices(el);
+    else if(currentTab==='invtracker') await renderInvoiceTracker(el);
     else if(currentTab==='kpi') await renderKPI(el);
     else if(currentTab==='visits') await renderVisits(el);
     else if(currentTab==='complaints') await renderComplaints(el);
@@ -5032,6 +5035,639 @@ if(createSupabaseClient()){
   bootGuest();
 } else {
   document.getElementById('connText').textContent = 'Library failed to load';
+}
+</script>
+<script>
+/* ============================================================
+   INVOICE TRACKER
+   Accounts hand over client invoices -> scan -> the bot server reads them ->
+   rows fill in. Client acknowledgement copies -> scan -> matched by invoice
+   number -> "Acknowledgement Received" / "Acknowledgment submitted to finance".
+   Table: invoice_tracker · Scans: storage bucket 'invoice-scans'
+   ============================================================ */
+const INVTRK_COMPANIES = {
+  ABC:'AZZURRO BUILDING CLEANING LLC',
+  AFM:'AZZURRO ONE FACILITIES MANAGEMENT LLC',
+  RCS:'RAK CLEANING SOLUTIONS LLC',
+  ABCP:'AZZURRO BUILDING CLEANING AND PEST CONTROL LLC'
+};
+const INVTRK_STATUSES = [
+  'Not Received from Accounts','Received from Accounts','Submitted to Area Manager','Submitted to Client',
+  'Acknowledgement Received','Acknowledgment submitted to finance','Returned to Finance','Not Applicable'
+];
+const INVTRK_ACK = 'Acknowledgement Received', INVTRK_FIN = 'Acknowledgment submitted to finance';
+const invTrk = { month:null, company:'', manager:'', status:'', q:'', rows:[], selected:new Set() };
+
+function invTrkToday(){ const d=new Date(); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10); }
+function invTrkMonthLabel(m){ return m ? new Date(m.slice(0,7)+'-01T00:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'}) : ''; }
+function invTrkBadge(s){
+  const c = s===INVTRK_FIN ? 'done' : s===INVTRK_ACK ? 'active' : (!s||s==='Not Received from Accounts'||s==='Returned to Finance') ? 'open' : s==='Not Applicable' ? '' : 'progress';
+  return `<span class="badge ${c}">${esc(s||'Not Received from Accounts')}</span>`;
+}
+function invTrkMoney(n){ return (n==null||n==='') ? '—' : Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+// "ABC/2026/0319", "INV-0319", "319" -> "319" (the last number group); letters-only kept as-is.
+function invTrkKey(no){
+  const s=String(no??'').toUpperCase().replace(/\s+/g,'');
+  const digits=s.match(/\d+/g);
+  return digits ? digits[digits.length-1].replace(/^0+(?=\d)/,'') : s;
+}
+function invTrkNormName(s){
+  return String(s||'').toLowerCase().replace(/&/g,' and ').replace(/[^a-z0-9]+/g,' ')
+    .replace(/\b(llc|l l c|co|company|the|est|establishment|fze|fzc|fzco|pjsc|psc|opc|br|branch)\b/g,' ').replace(/\s+/g,' ').trim();
+}
+function invTrkSimilar(a,b){
+  const A=new Set(invTrkNormName(a).split(' ').filter(Boolean)), B=new Set(invTrkNormName(b).split(' ').filter(Boolean));
+  if(!A.size||!B.size) return 0;
+  let hit=0; A.forEach(w=>{ if(B.has(w)) hit++; });
+  return hit / Math.min(A.size,B.size) * (hit / Math.max(A.size,B.size)) ** 0.25;
+}
+function invTrkParseDate(v){
+  if(v==null||v==='') return null;
+  if(v instanceof Date && !isNaN(v)){
+    // Excel dates come in a few minutes off midnight (old time-zone base) - round to the nearest day.
+    const d=new Date(v.getFullYear(), v.getMonth(), v.getDate() + (v.getHours()>=12?1:0));
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+  if(typeof v==='number' && v>20000 && v<80000){ const d=new Date(Math.round((v-25569)*86400000)); return d.toISOString().slice(0,10); }
+  const s=String(v).trim();
+  let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if(m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  m=s.match(/^(\d{1,2})[\/.\-]+(\d{1,2})[\/.\-]+(\d{2}|\d{4})$/);
+  if(m){ const y=m[3].length===2?'20'+m[3]:m[3]; if(+m[2]>=1&&+m[2]<=12&&+m[1]>=1&&+m[1]<=31) return `${y}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`; }
+  return null;
+}
+function invTrkStatus(s){
+  const t=String(s||'').trim().toLowerCase(); if(!t) return null;
+  const hit=INVTRK_STATUSES.find(x=>x.toLowerCase()===t); if(hit) return hit;
+  if(/finance/.test(t)&&/ack/.test(t)) return INVTRK_FIN;
+  if(/ack/.test(t)) return INVTRK_ACK;
+  if(/not\s*received/.test(t)) return 'Not Received from Accounts';
+  if(/area\s*manager|submitted to manager/.test(t)) return 'Submitted to Area Manager';
+  if(/client/.test(t)) return 'Submitted to Client';
+  if(/return/.test(t)) return 'Returned to Finance';
+  if(/received/.test(t)) return 'Received from Accounts';
+  if(/n\/?a|not applicable/.test(t)) return 'Not Applicable';
+  return null;
+}
+function invTrkBotCfg(){
+  const cfg = (typeof getHermesConfig==='function') ? getHermesConfig() : null;
+  return (cfg && cfg.url) ? cfg : null;
+}
+
+// ---------------------------------------------------------------- page
+async function renderInvoiceTracker(el){
+  if(!invTrk.month){
+    const { data:last } = await sb.from('invoice_tracker').select('month').order('month',{ascending:false}).limit(1);
+    if(last && last.length) invTrk.month = String(last[0].month).slice(0,7);
+    else { const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1); invTrk.month = d.toISOString().slice(0,7); }
+  }
+  const { data, error } = await sb.from('invoice_tracker').select('*').eq('month', invTrk.month+'-01')
+    .order('company').order('sl_no',{ascending:true, nullsFirst:false}).order('client_name');
+  if(error){
+    if(/invoice_tracker|relation|schema cache/i.test(error.message||'')){
+      el.innerHTML = `<div class="panel"><div class="panel-title">Invoice Tracker - setup needed</div>
+        <p style="color:var(--text-mid); font-size:13px;">Run <b>invoice_tracker_setup.sql</b> once in Supabase (SQL Editor → New query → paste → Run), then reload this page.</p></div>`;
+      return;
+    }
+    throw error;
+  }
+  invTrk.rows = data||[];
+  invTrk.selected = new Set([...invTrk.selected].filter(id=>invTrk.rows.some(r=>r.id===id)));
+  const writeOk = canWrite();
+  const managers = [...new Set(invTrk.rows.map(r=>(r.manager||'').trim()).filter(Boolean))].sort();
+  el.innerHTML = `
+  <div class="panel">
+    <div class="toolbar"><div class="panel-title" style="margin:0;">Invoice Tracker — ${esc(invTrkMonthLabel(invTrk.month))}</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${writeOk?`<button class="btn btn-primary" id="itScanInv">📷 Scan invoices</button>
+        <button class="btn btn-primary" id="itScanAck">✅ Scan acknowledgements</button>
+        <button class="btn" id="itAdd">+ Add</button>
+        <button class="btn" id="itUpload">⬆ Upload Excel</button>`:''}
+        <button class="btn" id="itTemplate">Template</button>
+        <button class="btn" id="itExport">⬇ Export Excel</button>
+      </div></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
+      <input type="month" id="itMonth" value="${esc(invTrk.month)}" style="width:auto;">
+      <select id="itCompany" style="width:auto;"><option value="">All companies</option>${Object.keys(INVTRK_COMPANIES).map(c=>`<option ${invTrk.company===c?'selected':''}>${c}</option>`).join('')}</select>
+      <select id="itManager" style="width:auto;"><option value="">All managers</option>${managers.map(m=>`<option ${invTrk.manager===m?'selected':''}>${esc(m)}</option>`).join('')}</select>
+      <select id="itStatus" style="width:auto;"><option value="">All statuses</option>${INVTRK_STATUSES.map(s=>`<option ${invTrk.status===s?'selected':''}>${esc(s)}</option>`).join('')}</select>
+      <input class="search-box" id="itSearch" placeholder="Search client / invoice no..." value="${esc(invTrk.q)}">
+      ${writeOk?`<button class="btn" id="itFinance" disabled>Submit to Finance (0)</button>
+      <button class="btn" id="itNewMonth" title="Copy last month's client list into this month">New month list</button>`:''}
+    </div>
+    <div class="grid-4" id="itStats" style="margin-bottom:12px;"></div>
+    <div style="overflow-x:auto;"><table><thead><tr>
+      ${writeOk?'<th><input type="checkbox" id="itAll" title="Select all shown"></th>':''}
+      <th>Co.</th><th>Sl</th><th>Client</th><th>Manager</th><th>Status</th><th>Handover</th><th>Ack Rec'd</th><th>Ack to Finance</th>
+      <th style="text-align:right;">Amount</th><th>Inv. Date</th><th>Inv. No</th><th>Scans</th><th>Remarks</th>${writeOk?'<th></th>':''}
+    </tr></thead><tbody id="itBody"></tbody></table></div>
+    <p class="hint">Scans are read by the AI on your bot server (chat ⚙ → bot server address and key). Check the filled values before saving. Invoice numbers are matched per company.</p>
+  </div>`;
+
+  const draw = ()=>{
+    const q=invTrk.q.toLowerCase();
+    const shown = invTrk.rows.filter(r=>
+      (!invTrk.company||r.company===invTrk.company) && (!invTrk.manager||(r.manager||'').trim()===invTrk.manager) &&
+      (!invTrk.status||(r.status||'Not Received from Accounts')===invTrk.status) &&
+      (!q || `${r.client_name} ${r.invoice_no||''} ${r.remarks||''} ${r.manager||''}`.toLowerCase().includes(q)));
+    const count = s=>shown.filter(r=>(r.status||'Not Received from Accounts')===s).length;
+    const total = shown.reduce((a,r)=>a+(Number(r.amount)||0),0);
+    document.getElementById('itStats').innerHTML = `
+      <div class="stat-card"><div class="label">Clients / rows</div><div class="value">${shown.length}</div></div>
+      <div class="stat-card crit"><div class="label">Not received from Accounts</div><div class="value">${count('Not Received from Accounts')}</div></div>
+      <div class="stat-card warn"><div class="label">With manager / client</div><div class="value">${count('Received from Accounts')+count('Submitted to Area Manager')+count('Submitted to Client')}</div></div>
+      <div class="stat-card ok"><div class="label">Ack received · to Finance</div><div class="value">${count(INVTRK_ACK)} · ${count(INVTRK_FIN)}</div></div>
+      <div class="stat-card"><div class="label">Invoiced amount (AED)</div><div class="value" style="font-size:22px;">${invTrkMoney(total)}</div></div>`;
+    document.getElementById('itBody').innerHTML = shown.length ? shown.map(r=>`<tr>
+      ${writeOk?`<td><input type="checkbox" data-sel="${r.id}" ${invTrk.selected.has(r.id)?'checked':''}></td>`:''}
+      <td>${esc(r.company)}</td><td>${r.sl_no??''}</td><td>${esc(r.client_name)}</td><td>${esc(r.manager||'')}</td>
+      <td>${invTrkBadge(r.status)}</td><td>${fmtDate(r.handover_date)}</td><td>${fmtDate(r.ack_received_date)}</td><td>${fmtDate(r.ack_submitted_date)}</td>
+      <td style="text-align:right; white-space:nowrap;">${invTrkMoney(r.amount)}</td><td>${fmtDate(r.invoice_date)}</td><td>${esc(r.invoice_no||'—')}</td>
+      <td style="white-space:nowrap;">${r.invoice_file?`<button class="icon-btn" data-file="${esc(r.invoice_file)}" title="Invoice scan">📄</button>`:''}${r.ack_file?`<button class="icon-btn" data-file="${esc(r.ack_file)}" title="Acknowledgement scan">✅</button>`:''}</td>
+      <td style="max-width:220px; font-size:12px; color:var(--text-mid);">${esc(r.remarks||'')}</td>
+      ${writeOk?`<td style="white-space:nowrap;"><button class="icon-btn" data-edit="${r.id}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-del="${r.id}" title="Delete">🗑</button>`:''}</td>`:''}
+    </tr>`).join('') : `<tr class="empty-row"><td colspan="15">No rows for this month${invTrk.rows.length?' with these filters':''}.${(!invTrk.rows.length&&writeOk)?' Use “New month list” to copy last month\'s clients, or Upload Excel.':''}</td></tr>`;
+    invTrk.shown = shown;
+    bindRows();
+  };
+  const updFinanceBtn = ()=>{
+    const b=document.getElementById('itFinance'); if(!b) return;
+    const n=invTrk.rows.filter(r=>invTrk.selected.has(r.id)&&r.status!==INVTRK_FIN).length;
+    b.textContent=`Submit to Finance (${n})`; b.disabled=!n;
+  };
+  const bindRows = ()=>{
+    el.querySelectorAll('[data-sel]').forEach(cb=>cb.onchange=()=>{ cb.checked?invTrk.selected.add(cb.dataset.sel):invTrk.selected.delete(cb.dataset.sel); updFinanceBtn(); });
+    el.querySelectorAll('[data-file]').forEach(b=>b.onclick=()=>invTrkOpenFile(b.dataset.file));
+    el.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>invTrkEdit(invTrk.rows.find(r=>r.id===b.dataset.edit)));
+    el.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ const r=invTrk.rows.find(x=>x.id===b.dataset.del); deleteRecord('invoice_tracker', r.id, `${r.company} · ${r.client_name}${r.invoice_no?' · '+r.invoice_no:''}`); });
+    updFinanceBtn();
+  };
+  draw();
+
+  document.getElementById('itMonth').onchange = e=>{ if(e.target.value){ invTrk.month=e.target.value; invTrk.selected.clear(); renderContent(); } };
+  document.getElementById('itCompany').onchange = e=>{ invTrk.company=e.target.value; draw(); };
+  document.getElementById('itManager').onchange = e=>{ invTrk.manager=e.target.value; draw(); };
+  document.getElementById('itStatus').onchange = e=>{ invTrk.status=e.target.value; draw(); };
+  document.getElementById('itSearch').oninput = e=>{ invTrk.q=e.target.value; draw(); };
+  document.getElementById('itExport').onclick = ()=>invTrkExport(invTrk.shown||invTrk.rows);
+  document.getElementById('itTemplate').onclick = invTrkTemplate;
+  if(!writeOk) return;
+  document.getElementById('itAll').onchange = e=>{ (invTrk.shown||[]).forEach(r=>e.target.checked?invTrk.selected.add(r.id):invTrk.selected.delete(r.id)); draw(); };
+  document.getElementById('itAdd').onclick = ()=>invTrkEdit(null);
+  document.getElementById('itUpload').onclick = invTrkUploadExcel;
+  document.getElementById('itScanInv').onclick = ()=>invTrkScan('invoice');
+  document.getElementById('itScanAck').onclick = ()=>invTrkScan('ack');
+  document.getElementById('itFinance').onclick = async ()=>{
+    const ids=invTrk.rows.filter(r=>invTrk.selected.has(r.id)&&r.status!==INVTRK_FIN).map(r=>r.id);
+    const notAck=invTrk.rows.filter(r=>ids.includes(r.id)&&r.status!==INVTRK_ACK).length;
+    const date=prompt(`Mark ${ids.length} row(s) as "${INVTRK_FIN}".${notAck?`\n(${notAck} of them have no acknowledgement scanned yet.)`:''}\n\nDate given to Finance (YYYY-MM-DD):`, invTrkToday());
+    if(date===null) return;
+    const d=invTrkParseDate(date); if(!d){ alert('Please enter a date like 2026-10-05'); return; }
+    const { error } = await sb.from('invoice_tracker').update({ status:INVTRK_FIN, ack_submitted_date:d }).in('id', ids);
+    if(error) alert('Update failed: '+error.message); else { invTrk.selected.clear(); renderContent(); }
+  };
+  document.getElementById('itNewMonth').onclick = async ()=>{
+    if(!confirm(`Copy the client list of the previous month into ${invTrkMonthLabel(invTrk.month)}?\nNew rows start as "Not Received from Accounts". Clients already in this month are skipped.`)) return;
+    const { data:n, error } = await sb.rpc('invoice_tracker_new_month', { target_month: invTrk.month+'-01' });
+    if(error) alert('Failed: '+error.message); else { alert(n ? `${n} row(s) created.` : 'Nothing to copy (this month already has the list, or there is no earlier month).'); renderContent(); }
+  };
+}
+
+async function invTrkOpenFile(path){
+  const w = window.open('', '_blank');
+  const { data, error } = await sb.storage.from('invoice-scans').createSignedUrl(path, 600);
+  if(error||!data){ if(w) w.close(); alert('Could not open the scan: '+(error?.message||'not found')); return; }
+  if(w) w.location = data.signedUrl; else location.href = data.signedUrl;
+}
+
+function invTrkFields(){
+  return [
+    {k:'month',l:'Invoice month',type:'month'},
+    {k:'company',l:'Company',type:'select',options:Object.keys(INVTRK_COMPANIES)},
+    {k:'sl_no',l:'Sl. No',type:'number'},
+    {k:'client_name',l:'Client name'},{k:'manager',l:'Manager'},
+    {k:'status',l:'Status',type:'select',options:INVTRK_STATUSES},
+    {k:'invoice_no',l:'Invoice No'},{k:'invoice_date',l:'Invoice date',type:'date'},{k:'amount',l:'Amount (AED, incl. VAT)',type:'number'},
+    {k:'handover_date',l:'Handover date (to Area Manager)',type:'date'},
+    {k:'ack_received_date',l:'Acknowledgement received date',type:'date'},
+    {k:'ack_submitted_date',l:'Acknowledgement submitted to Finance date',type:'date'},
+    {k:'remarks',l:'Remarks',type:'textarea'}
+  ];
+}
+function invTrkClean(v){
+  const out={...v};
+  if(out.month) out.month = String(out.month).slice(0,7)+'-01';
+  ['sl_no','amount'].forEach(k=>{ out[k] = (out[k]===''||out[k]==null) ? null : Number(out[k]); });
+  ['invoice_date','handover_date','ack_received_date','ack_submitted_date','invoice_no','manager','remarks'].forEach(k=>{ if(out[k]==='') out[k]=null; });
+  if(out.client_name) out.client_name = out.client_name.trim();
+  return out;
+}
+async function invTrkEdit(row){
+  const existing = row ? {...row, month:String(row.month).slice(0,7)} : { month:invTrk.month, company:invTrk.company||'AFM', status:'Not Received from Accounts' };
+  await openForm('Invoice Tracker Row', invTrkFields(), async(values)=>{
+    const v=invTrkClean(values);
+    if(!v.client_name){ alert('Client name is required.'); return; }
+    if(v.status===INVTRK_FIN && !v.ack_submitted_date) v.ack_submitted_date=invTrkToday();
+    if(v.status===INVTRK_ACK && !v.ack_received_date) v.ack_received_date=invTrkToday();
+    const q = row ? sb.from('invoice_tracker').update(v).eq('id', row.id) : sb.from('invoice_tracker').insert(v);
+    const { error } = await q;
+    if(error) alert('Save failed: '+error.message); else renderContent();
+  }, row ? existing : null);
+  if(!row){ // openForm only pre-fills when editing - set sensible defaults for a new row
+    const w=document.getElementById('formFields');
+    Object.entries(existing).forEach(([k,val])=>{ const i=w.querySelector(`[data-k="${k}"]`); if(i) i.value=val; });
+  }
+}
+
+// ---------------------------------------------------------------- scans -> page images
+let invTrkPdfLib=null;
+async function invTrkLoadPdf(){
+  if(invTrkPdfLib) return invTrkPdfLib;
+  await new Promise((ok,fail)=>{ const s=document.createElement('script'); s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'; s.onload=ok; s.onerror=()=>fail(new Error('Could not load the PDF reader')); document.head.appendChild(s); });
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  return invTrkPdfLib=window.pdfjsLib;
+}
+function invTrkCanvasJpeg(src, w, h){
+  const maxSide=1800, k=Math.min(1, maxSide/Math.max(w,h));
+  const c=document.createElement('canvas'); c.width=Math.round(w*k); c.height=Math.round(h*k);
+  const g=c.getContext('2d'); g.fillStyle='#fff'; g.fillRect(0,0,c.width,c.height); g.drawImage(src,0,0,c.width,c.height);
+  return c.toDataURL('image/jpeg',0.82);
+}
+async function invTrkPages(file){
+  if(/pdf$/i.test(file.type)||/\.pdf$/i.test(file.name)){
+    const lib=await invTrkLoadPdf();
+    const doc=await lib.getDocument({data:await file.arrayBuffer()}).promise;
+    const out=[];
+    for(let p=1;p<=Math.min(doc.numPages,40);p++){
+      const page=await doc.getPage(p); const v1=page.getViewport({scale:1});
+      const vp=page.getViewport({scale:Math.min(2.5,1800/Math.max(v1.width,v1.height))});
+      const c=document.createElement('canvas'); c.width=Math.round(vp.width); c.height=Math.round(vp.height);
+      const g=c.getContext('2d'); g.fillStyle='#fff'; g.fillRect(0,0,c.width,c.height);
+      await page.render({canvasContext:g, viewport:vp}).promise;
+      out.push(c.toDataURL('image/jpeg',0.82));
+    }
+    return out;
+  }
+  if(!/^image\//.test(file.type)) throw new Error('only PDF or image files (JPG/PNG) can be read');
+  const url=URL.createObjectURL(file);
+  try{
+    const img=await new Promise((ok,fail)=>{ const i=new Image(); i.onload=()=>ok(i); i.onerror=()=>fail(new Error('this image type cannot be opened in the browser - save it as JPG or PDF')); i.src=url; });
+    return [invTrkCanvasJpeg(img, img.naturalWidth, img.naturalHeight)];
+  }finally{ URL.revokeObjectURL(url); }
+}
+async function invTrkRead(kind, pages, filename){
+  const cfg=invTrkBotCfg();
+  if(!cfg) throw new Error('the bot server is not set up in this browser (chat ⚙ → bot server address + key)');
+  const res=await fetch(cfg.url.replace(/\/+$/,'')+'/v1/invoice/read',{ method:'POST',
+    headers:{'Content-Type':'application/json', ...(cfg.key?{'Authorization':'Bearer '+cfg.key}:{})},
+    body:JSON.stringify({kind, images:pages, filename}) });
+  let data={}; try{ data=await res.json(); }catch(e){}
+  if(!res.ok||!data.ok) throw new Error(data.error||('bot server answered '+res.status+(res.status===404?' - update the bot server (it has no invoice reader yet)':'')));
+  return data;
+}
+async function invTrkUploadScan(file, folder){
+  const safe=file.name.replace(/[^A-Za-z0-9._-]+/g,'_').slice(-80);
+  const path=`${folder}/${Date.now()}-${Math.random().toString(36).slice(2,7)}-${safe}`;
+  const { error } = await sb.storage.from('invoice-scans').upload(path, file, { contentType:file.type||'application/octet-stream', upsert:false });
+  if(error) throw new Error('could not store the scan: '+error.message);
+  return path;
+}
+
+// ---------------------------------------------------------------- big modal
+function invTrkModal(title, bodyHtml, actionsHtml){
+  let m=document.getElementById('invTrkModal');
+  if(!m){ m=document.createElement('div'); m.className='modal-backdrop'; m.id='invTrkModal'; document.body.appendChild(m); }
+  m.innerHTML=`<div class="modal" style="width:1180px; max-width:96vw; max-height:92vh;"><h3>${esc(title)}</h3><div id="itmBody">${bodyHtml}</div>
+    <div class="modal-actions" id="itmActions">${actionsHtml||''}<button class="btn" id="itmClose">Close</button></div></div>`;
+  m.classList.add('show');
+  m.querySelector('#itmClose').onclick=()=>m.classList.remove('show');
+  return m;
+}
+
+async function invTrkScan(kind){
+  const isInv = kind==='invoice';
+  const m=invTrkModal(isInv?'Scan invoices from Accounts':'Scan client acknowledgement copies', `
+    <p class="hint" style="margin-top:0;">${isInv
+      ? 'Choose one or many scans (PDF, JPG or PNG). A PDF may hold several invoices. The AI reads company, client, invoice number, date and amount; you check them, then save. The scan is kept with the row.'
+      : 'Choose the signed / stamped copies returned by the client. The AI reads the invoice number(s) and the received date, finds the matching rows (any month) and updates their status.'}</p>
+    <div class="field"><label>Scanned files</label><input type="file" id="itmFiles" multiple accept=".pdf,image/*"></div>
+    ${isInv?'':`<div class="field"><label>Set status to</label><select id="itmAckStatus" style="width:auto;"><option>${INVTRK_ACK}</option><option>${INVTRK_FIN}</option></select></div>`}
+    <div id="itmProgress" style="font-size:12.5px; color:var(--text-mid); margin:8px 0;"></div>
+    <div id="itmReview" style="overflow-x:auto;"></div>`,
+    `<button class="btn btn-primary" id="itmRead">Read scans</button><button class="btn btn-primary" id="itmSave" style="display:none;">Save checked rows</button>`);
+  const prog=m.querySelector('#itmProgress');
+  m.querySelector('#itmRead').onclick = async ()=>{
+    const files=[...m.querySelector('#itmFiles').files];
+    if(!files.length){ prog.textContent='Choose at least one file.'; return; }
+    if(!invTrkBotCfg()){ prog.innerHTML='<span style="color:var(--red)">Set the bot server first: open the chat, ⚙, enter the bot server address and API key.</span>'; return; }
+    m.querySelector('#itmRead').disabled=true;
+    const found=[]; const errors=[];
+    for(const [fi,file] of files.entries()){
+      try{
+        prog.textContent=`Preparing ${file.name} (${fi+1}/${files.length})…`;
+        const pages=await invTrkPages(file);
+        const items=[];
+        let ackInfo={};
+        for(let p=0;p<pages.length;p+=4){
+          prog.textContent=`Reading ${file.name} - page ${p+1}${pages.length>1?' of '+pages.length:''} (${fi+1}/${files.length})…`;
+          const d=await invTrkRead(kind, pages.slice(p,p+4), file.name);
+          if(isInv) items.push(...d.invoices);
+          else { items.push(...d.items.map(x=>({...x, received_date:d.received_date, received_by:d.received_by, stamped:d.stamped}))); ackInfo=d; }
+        }
+        // a multi-page invoice read in two parts -> keep one, fill gaps from the other
+        const merged=[];
+        items.forEach(x=>{
+          const same=merged.find(y=>invTrkKey(y.invoice_no)===invTrkKey(x.invoice_no) && x.invoice_no && (!x.company||!y.company||x.company===y.company));
+          if(same) Object.keys(x).forEach(k=>{ if(same[k]==null||same[k]==='') same[k]=x[k]; });
+          else merged.push({...x});
+        });
+        if(!merged.length) errors.push(`${file.name}: no ${isInv?'invoice':'invoice number'} found`);
+        merged.forEach(x=>found.push({...x, file}));
+      }catch(e){ errors.push(`${file.name}: ${e.message||e}`); }
+    }
+    m.querySelector('#itmRead').disabled=false;
+    prog.innerHTML = `${found.length} ${isInv?'invoice(s)':'invoice number(s)'} found in ${files.length} file(s).` +
+      (errors.length?`<div style="color:var(--red); margin-top:4px;">${errors.map(esc).join('<br>')}</div>`:'');
+    if(found.length) await (isInv ? invTrkReviewInvoices(m, found) : invTrkReviewAcks(m, found));
+  };
+}
+
+// ---- invoices: review + save
+async function invTrkReviewInvoices(m, found){
+  const months=[...new Set(found.map(x=>(x.period||(x.invoice_date||'').slice(0,7)||invTrk.month)))];
+  const { data:existing } = await sb.from('invoice_tracker').select('*').in('month', months.map(x=>x+'-01'));
+  const pool=existing||[];
+  const rowsOf=(month,company)=>pool.filter(r=>String(r.month).slice(0,7)===month && (!company||r.company===company));
+  const best=(x,month)=>{
+    const cands=rowsOf(month,x.company);
+    const byNo=cands.find(r=>r.invoice_no && invTrkKey(r.invoice_no)===invTrkKey(x.invoice_no));
+    if(byNo) return byNo.id;
+    let top=null, score=0;
+    cands.filter(r=>!r.invoice_no).forEach(r=>{ const s=Math.max(invTrkSimilar(r.client_name,x.client_name), invTrkSimilar(r.client_name,x.site)); if(s>score){score=s; top=r;} });
+    return score>=0.5 ? top.id : '';
+  };
+  const optRows=(month,company,sel)=>`<option value="">➕ New row</option>`+rowsOf(month,company).map(r=>
+    `<option value="${r.id}" ${r.id===sel?'selected':''}>${esc(r.company)} ${r.sl_no??''} · ${esc(r.client_name)}${r.invoice_no?' · #'+esc(r.invoice_no):''}</option>`).join('');
+  const today=invTrkToday();
+  found.forEach(x=>{ x.month=(x.period||(x.invoice_date||'').slice(0,7)||invTrk.month); x.match=best(x,x.month); });
+  const body=m.querySelector('#itmReview');
+  body.innerHTML=`<table style="font-size:12px;"><thead><tr><th></th><th>Scan</th><th>Month</th><th>Co.</th><th>Client on invoice</th><th>Tracker row</th><th>Inv. No</th><th>Inv. Date</th><th>Amount</th><th>Status</th><th>Handover</th></tr></thead><tbody>
+  ${found.map((x,i)=>{
+    const matchedNo = x.match && pool.find(r=>r.id===x.match)?.invoice_no;
+    const warn = x.confidence==='low' ? ' style="background:rgba(255,180,84,0.08)"' : '';
+    return `<tr data-i="${i}"${warn}>
+    <td><input type="checkbox" data-f="use" checked></td>
+    <td title="${esc(x.file.name)}" style="max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(x.file.name)}${x.confidence==='low'?' <span style="color:var(--amber)">⚠ check</span>':''}</td>
+    <td><input type="month" data-f="month" value="${esc(x.month)}" style="width:128px;"></td>
+    <td><select data-f="company">${['',...Object.keys(INVTRK_COMPANIES)].map(c=>`<option value="${c}" ${x.company===c?'selected':''}>${c||'?'}</option>`).join('')}</select></td>
+    <td><input data-f="client_name" value="${esc(x.client_name)}" style="min-width:160px;" title="${esc(x.site||'')}"></td>
+    <td><select data-f="match" style="max-width:230px;">${optRows(x.month,x.company,x.match)}</select>${matchedNo?'<div style="color:var(--amber); font-size:10.5px;">row already has an invoice no - it will be replaced</div>':''}</td>
+    <td><input data-f="invoice_no" value="${esc(x.invoice_no)}" style="width:90px;"></td>
+    <td><input type="date" data-f="invoice_date" value="${esc(x.invoice_date)}"></td>
+    <td><input type="number" step="0.01" data-f="amount" value="${x.amount??''}" style="width:105px;"></td>
+    <td><select data-f="status">${INVTRK_STATUSES.map(s=>`<option ${s==='Submitted to Area Manager'?'selected':''}>${esc(s)}</option>`).join('')}</select></td>
+    <td><input type="date" data-f="handover_date" value="${today}"></td></tr>`;}).join('')}
+  </tbody></table>`;
+  // changing month or company refreshes the row choices
+  body.querySelectorAll('tr[data-i]').forEach(tr=>{
+    const x=found[+tr.dataset.i];
+    const refresh=()=>{ const mo=tr.querySelector('[data-f=month]').value, co=tr.querySelector('[data-f=company]').value;
+      tr.querySelector('[data-f=match]').innerHTML=optRows(mo,co,best({...x,company:co},mo)); };
+    tr.querySelector('[data-f=month]').onchange=refresh; tr.querySelector('[data-f=company]').onchange=refresh;
+  });
+  const save=m.querySelector('#itmSave'); save.style.display='';
+  save.onclick=async()=>{
+    save.disabled=true; const prog=m.querySelector('#itmProgress'); let ok=0; const errs=[]; const uploaded=new Map(); const used=new Set();
+    for(const tr of body.querySelectorAll('tr[data-i]')){
+      if(!tr.querySelector('[data-f=use]').checked) continue;
+      const x=found[+tr.dataset.i]; const g=f=>tr.querySelector(`[data-f=${f}]`).value.trim();
+      try{
+        if(!g('company')) throw new Error('choose the company');
+        if(!g('client_name') && !g('match')) throw new Error('client name is empty');
+        if(g('match') && used.has(g('match'))) throw new Error('two invoices point to the same tracker row - pick “New row” for one');
+        prog.textContent=`Saving ${g('client_name')||x.file.name}…`;
+        if(!uploaded.has(x.file)) uploaded.set(x.file, await invTrkUploadScan(x.file, `invoices/${g('month')}`));
+        const v={ month:g('month')+'-01', company:g('company'), invoice_no:g('invoice_no')||null, invoice_date:g('invoice_date')||null,
+          amount:g('amount')===''?null:Number(g('amount')), status:g('status'), handover_date:g('handover_date')||null, invoice_file:uploaded.get(x.file) };
+        let error;
+        if(g('match')){ used.add(g('match')); ({ error } = await sb.from('invoice_tracker').update(v).eq('id', g('match'))); }
+        else {
+          const sl=Math.max(0,...pool.filter(r=>String(r.month).slice(0,7)===g('month')&&r.company===g('company')).map(r=>r.sl_no||0))+1;
+          const ins={...v, client_name:g('client_name'), sl_no:sl};
+          const res=await sb.from('invoice_tracker').insert(ins).select().single(); error=res.error; if(res.data) pool.push(res.data);
+        }
+        if(error) throw error;
+        tr.style.opacity=.45; tr.querySelector('[data-f=use]').checked=false; ok++;
+      }catch(e){ errs.push(`${x.file.name}: ${e.message||e}`); }
+    }
+    save.disabled=false;
+    prog.innerHTML=`${ok} saved.`+(errs.length?`<div style="color:var(--red)">${errs.map(esc).join('<br>')}</div>`:'');
+    if(ok){ if(found.length===1||!errs.length) invTrk.month=found[0].month||invTrk.month; renderContent(); }
+  };
+}
+
+// ---- acknowledgements: match by invoice number (+ company) and update status
+async function invTrkReviewAcks(m, found){
+  const since=new Date(); since.setMonth(since.getMonth()-14);
+  const { data } = await sb.from('invoice_tracker').select('id,month,company,client_name,invoice_no,status,amount,remarks')
+    .not('invoice_no','is',null).gte('month', since.toISOString().slice(0,7)+'-01');
+  const pool=data||[];
+  const cands=x=>pool.filter(r=>invTrkKey(r.invoice_no)===invTrkKey(x.invoice_no) && (!x.company||r.company===x.company));
+  const status=m.querySelector('#itmAckStatus').value, today=invTrkToday();
+  const body=m.querySelector('#itmReview');
+  body.innerHTML=`<table style="font-size:12px;"><thead><tr><th></th><th>Scan</th><th>Inv. No</th><th>Co.</th><th>Tracker row</th><th>Received by client</th><th>Given to Finance</th><th>Note</th></tr></thead><tbody>
+  ${found.map((x,i)=>{
+    const c=cands(x); const sel=c.length===1?c[0].id:'';
+    return `<tr data-i="${i}">
+      <td><input type="checkbox" data-f="use" ${sel?'checked':''}></td>
+      <td title="${esc(x.file.name)}" style="max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(x.file.name)}</td>
+      <td><b>${esc(x.invoice_no)}</b></td><td>${esc(x.company||'?')}</td>
+      <td><select data-f="match" style="max-width:300px;"><option value="">${c.length?'— choose —':'❌ not found in tracker'}</option>${(c.length?c:pool.filter(r=>invTrkKey(r.invoice_no)===invTrkKey(x.invoice_no))).map(r=>
+        `<option value="${r.id}" ${r.id===sel?'selected':''}>${esc(r.company)} · ${esc(invTrkMonthLabel(String(r.month)))} · ${esc(r.client_name)} · #${esc(r.invoice_no)} · ${esc(r.status||'')}</option>`).join('')}</select></td>
+      <td><input type="date" data-f="ack_received_date" value="${esc(x.received_date||today)}"></td>
+      <td><input type="date" data-f="ack_submitted_date" value="${status===INVTRK_FIN?today:''}"></td>
+      <td style="font-size:11px; color:var(--text-dim);">${x.stamped?'stamped/signed':'<span style="color:var(--amber)">no stamp seen</span>'}${x.received_by?' · '+esc(x.received_by):''}</td></tr>`;}).join('')}
+  </tbody></table>`;
+  body.querySelectorAll('[data-f=match]').forEach(s=>s.onchange=()=>{ s.closest('tr').querySelector('[data-f=use]').checked=!!s.value; });
+  const save=m.querySelector('#itmSave'); save.style.display='';
+  save.onclick=async()=>{
+    save.disabled=true; const prog=m.querySelector('#itmProgress'); let ok=0; const errs=[]; const uploaded=new Map();
+    const st=m.querySelector('#itmAckStatus').value;
+    for(const tr of body.querySelectorAll('tr[data-i]')){
+      if(!tr.querySelector('[data-f=use]').checked) continue;
+      const x=found[+tr.dataset.i]; const g=f=>tr.querySelector(`[data-f=${f}]`).value;
+      try{
+        if(!g('match')) throw new Error(`invoice ${x.invoice_no}: choose the tracker row`);
+        if(!uploaded.has(x.file)) uploaded.set(x.file, await invTrkUploadScan(x.file, 'acknowledgements'));
+        const row=pool.find(r=>r.id===g('match'));
+        const v={ status:st, ack_received_date:g('ack_received_date')||today, ack_file:uploaded.get(x.file) };
+        if(st===INVTRK_FIN) v.ack_submitted_date=g('ack_submitted_date')||today;
+        if(x.received_by && !(row.remarks||'').includes(x.received_by)) v.remarks=[row.remarks,`Ack: ${x.received_by}`].filter(Boolean).join(' · ');
+        const { error } = await sb.from('invoice_tracker').update(v).eq('id', row.id);
+        if(error) throw error;
+        tr.style.opacity=.45; tr.querySelector('[data-f=use]').checked=false; ok++;
+      }catch(e){ errs.push(`${x.file.name}: ${e.message||e}`); }
+    }
+    save.disabled=false;
+    prog.innerHTML=`${ok} row(s) updated to “${esc(st)}”.`+(errs.length?`<div style="color:var(--red)">${errs.map(esc).join('<br>')}</div>`:'');
+    if(ok) renderContent();
+  };
+}
+
+// ---------------------------------------------------------------- Excel: template, upload, export
+const INVTRK_COLS = [
+  ['month','Month (YYYY-MM)'],['company','Company'],['sl_no','Sl No'],['client_name','Client Name'],['manager','Manager'],['status','Status'],
+  ['handover_date','Handover Date'],['ack_received_date','Ack Received Date'],['ack_submitted_date','Ack Submitted to Finance Date'],
+  ['amount','Amount'],['invoice_date','Invoice Date'],['invoice_no','Invoice No'],['remarks','Remarks']
+];
+function invTrkTemplate(){
+  const wb=XLSX.utils.book_new();
+  const ws=XLSX.utils.aoa_to_sheet([INVTRK_COLS.map(c=>c[1]),
+    [invTrk.month,'AFM',1,'AWQAF','Gulam','Submitted to Area Manager','2026-10-01','','',5250,'2026-09-30','1201','']]);
+  ws['!cols']=INVTRK_COLS.map(c=>({wch:Math.max(12,c[1].length+2)})); ws['!cols'][3]={wch:40};
+  XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
+  const lists=[['Company code','Company name','','Status']];
+  const codes=Object.entries(INVTRK_COMPANIES);
+  for(let i=0;i<Math.max(codes.length,INVTRK_STATUSES.length);i++) lists.push([codes[i]?.[0]||'',codes[i]?.[1]||'','',INVTRK_STATUSES[i]||'']);
+  lists.push([],['Dates: YYYY-MM-DD or DD/MM/YYYY. Month is optional (the month chosen when uploading is used).'],
+    ['You can also upload your old tracker workbook as it is: sheets named ABC / AFM / RCS / ABCP are read; other sheets are skipped.']);
+  const ws2=XLSX.utils.aoa_to_sheet(lists); ws2['!cols']=[{wch:14},{wch:48},{wch:2},{wch:38}];
+  XLSX.utils.book_append_sheet(wb, ws2, 'Lists & help');
+  XLSX.writeFile(wb, 'Invoice Tracker - upload template.xlsx');
+}
+
+// header text -> column key (also understands the old tracker headers)
+function invTrkHeaderKey(h){
+  const t=String(h||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  if(!t) return null;
+  if(/^month\b/.test(t)) return 'month';
+  if(/^company/.test(t)) return 'company';
+  if(/^(sl|s) ?no\b|^sl\b|^s no\b|^serial/.test(t)) return 'sl_no';
+  if(/client/.test(t)) return 'client_name';
+  if(/manager/.test(t)) return 'manager';
+  if(/^status/.test(t)) return 'status';
+  if(/ack/.test(t) && /rec/.test(t)) return 'ack_received_date';
+  if(/ack/.test(t)) return 'ack_submitted_date';
+  if(/handover/.test(t)) return 'handover_date';
+  if(/inv/.test(t) && /\bno\b|number|num/.test(t)) return 'invoice_no';
+  if(/inv/.test(t) && /date/.test(t)) return 'invoice_date';
+  if(/amount|value|total/.test(t)) return 'amount';
+  if(/remark|note|comment/.test(t)) return 'remarks';
+  return null;
+}
+function invTrkParseWorkbook(wb, defMonth){
+  const rows=[], skipped=[], notes=[];
+  wb.SheetNames.forEach(name=>{
+    const aoa=XLSX.utils.sheet_to_json(wb.Sheets[name],{header:1, raw:true, defval:null});
+    const hi=aoa.slice(0,8).findIndex(r=>(r||[]).some(c=>invTrkHeaderKey(c)==='client_name'));
+    if(hi<0){ if(aoa.some(r=>(r||[]).some(c=>c!=null&&c!==''))) skipped.push(name); return; }
+    const keys=(aoa[hi]||[]).map(invTrkHeaderKey);
+    let sheetCo=Object.keys(INVTRK_COMPANIES).find(c=>c===name.trim().toUpperCase());
+    if(!sheetCo){ const title=aoa.slice(0,hi).flat().filter(Boolean).join(' ').toUpperCase();
+      sheetCo=Object.entries(INVTRK_COMPANIES).sort((a,b)=>b[1].length-a[1].length).find(([c,n])=>title.includes(n))?.[0]; }
+    if(!sheetCo && !keys.includes('company')){ skipped.push(name); return; }
+    let n=0;
+    aoa.slice(hi+1).forEach(r=>{
+      const o={}; keys.forEach((k,i)=>{ if(k && o[k]==null) o[k]=r[i]; });
+      if(!o.client_name || !String(o.client_name).trim()) return;
+      const co=String(o.company||sheetCo||'').trim().toUpperCase();
+      const company=INVTRK_COMPANIES[co]?co:(Object.entries(INVTRK_COMPANIES).find(([c,nm])=>nm===co)?.[0]);
+      if(!company){ notes.push(`${name}: “${o.client_name}” has no valid company - skipped`); return; }
+      const rem=[o.remarks!=null?String(o.remarks).trim():''];
+      const dates={};
+      ['handover_date','ack_received_date','ack_submitted_date','invoice_date'].forEach(k=>{
+        if(o[k]==null||o[k]==='') return; const d=invTrkParseDate(o[k]);
+        if(d) dates[k]=d; else rem.push(`${k.replace(/_/g,' ')}: ${o[k]}`);
+      });
+      let month=defMonth;
+      if(o.month!=null&&o.month!==''){ const d=o.month instanceof Date||typeof o.month==='number'?invTrkParseDate(o.month):(/^\d{4}-\d{2}/.test(String(o.month))?String(o.month).slice(0,7)+'-01':invTrkParseDate(o.month)); if(d) month=d.slice(0,7); }
+      const amt=o.amount==null||o.amount===''?null:Number(String(o.amount).replace(/[^0-9.\-]/g,''));
+      rows.push({ month:month+'-01', company, sl_no:Number.isFinite(+o.sl_no)&&o.sl_no!==null&&o.sl_no!==''?Math.round(+o.sl_no):null,
+        client_name:String(o.client_name).replace(/\s+/g,' ').trim(), manager:o.manager?String(o.manager).trim():null,
+        status:invTrkStatus(o.status)||(o.invoice_no?'Submitted to Area Manager':'Not Received from Accounts'),
+        amount:Number.isFinite(amt)?amt:null, invoice_no:o.invoice_no!=null&&o.invoice_no!==''?String(o.invoice_no).trim():null,
+        remarks:rem.filter(Boolean).join(' · ')||null, ...dates, _sheet:name });
+      n++;
+    });
+    if(!n) skipped.push(name);
+  });
+  return { rows, skipped, notes };
+}
+function invTrkUploadExcel(){
+  const m=invTrkModal('Upload invoice list (Excel / CSV)', `
+    <p class="hint" style="margin-top:0;">Use the <b>Template</b>, or upload your old monthly tracker workbook as it is (sheets ABC, AFM, RCS, ABCP are read; per-manager sheets are skipped).
+    Rows are matched to this month's list by company + client name (+ invoice no) and updated; others are added.</p>
+    <div style="display:flex; gap:12px; flex-wrap:wrap;">
+      <div class="field"><label>Month (used when the file has no Month column)</label><input type="month" id="ituMonth" value="${esc(invTrk.month)}"></div>
+      <div class="field" style="flex:1; min-width:260px;"><label>File</label><input type="file" id="ituFile" accept=".xlsx,.xls,.csv"></div>
+    </div>
+    <div id="itmProgress" style="font-size:12.5px; color:var(--text-mid); margin:8px 0;"></div><div id="itmReview"></div>`,
+    `<button class="btn btn-primary" id="ituCheck">Check file</button><button class="btn btn-primary" id="ituGo" style="display:none;">Import</button>`);
+  let plan=null;
+  m.querySelector('#ituCheck').onclick=async()=>{
+    const f=m.querySelector('#ituFile').files[0], mo=m.querySelector('#ituMonth').value, prog=m.querySelector('#itmProgress');
+    if(!f||!mo){ prog.textContent='Choose the month and a file.'; return; }
+    try{
+      const wb=XLSX.read(await f.arrayBuffer(),{type:'array', cellDates:true});
+      const { rows, skipped, notes } = invTrkParseWorkbook(wb, mo);
+      if(!rows.length){ prog.innerHTML='<span style="color:var(--red)">No rows found. The header row needs a “Client Name” column.</span>'; return; }
+      const months=[...new Set(rows.map(r=>r.month))];
+      const { data:ex, error } = await sb.from('invoice_tracker').select('*').in('month', months);
+      if(error) throw error;
+      const used=new Set(); let upd=0;
+      rows.forEach(r=>{
+        const same=(ex||[]).filter(e=>!used.has(e.id)&&e.month===r.month&&e.company===r.company&&invTrkNormName(e.client_name)===invTrkNormName(r.client_name));
+        const hit=same.find(e=>r.invoice_no&&e.invoice_no&&invTrkKey(e.invoice_no)===invTrkKey(r.invoice_no))||same.find(e=>!e.invoice_no||!r.invoice_no)||null;
+        if(hit){ used.add(hit.id); r._id=hit.id; upd++; }
+      });
+      plan=rows;
+      const byCo={}; rows.forEach(r=>{ byCo[r.company]=(byCo[r.company]||0)+1; });
+      prog.innerHTML=`<b>${rows.length}</b> rows read (${Object.entries(byCo).map(([c,n])=>`${c} ${n}`).join(', ')}) for ${months.map(x=>esc(invTrkMonthLabel(x))).join(', ')}:
+        <b>${rows.length-upd}</b> new, <b>${upd}</b> update existing rows.`+
+        (skipped.length?`<div>Skipped sheets: ${skipped.map(esc).join(', ')}</div>`:'')+(notes.length?`<div style="color:var(--amber)">${notes.slice(0,8).map(esc).join('<br>')}</div>`:'');
+      m.querySelector('#itmReview').innerHTML=`<div style="max-height:300px; overflow:auto;"><table style="font-size:11.5px;"><thead><tr><th></th><th>Month</th><th>Co.</th><th>Sl</th><th>Client</th><th>Manager</th><th>Status</th><th>Inv No</th><th>Amount</th><th>Remarks</th></tr></thead><tbody>${
+        rows.slice(0,400).map(r=>`<tr><td>${r._id?'↻':'➕'}</td><td>${esc(r.month.slice(0,7))}</td><td>${esc(r.company)}</td><td>${r.sl_no??''}</td><td>${esc(r.client_name)}</td><td>${esc(r.manager||'')}</td><td>${esc(r.status)}</td><td>${esc(r.invoice_no||'')}</td><td>${invTrkMoney(r.amount)}</td><td>${esc(r.remarks||'')}</td></tr>`).join('')}</tbody></table></div>`;
+      m.querySelector('#ituGo').style.display='';
+    }catch(e){ prog.innerHTML=`<span style="color:var(--red)">Could not read the file: ${esc(e.message||e)}</span>`; }
+  };
+  m.querySelector('#ituGo').onclick=async()=>{
+    if(!plan) return; const go=m.querySelector('#ituGo'); go.disabled=true; const prog=m.querySelector('#itmProgress');
+    const clean=plan.map(r=>{ const {_sheet,_id,...v}=r; return {_id, v}; });
+    let done=0; const errs=[];
+    const inserts=clean.filter(x=>!x._id).map(x=>x.v);
+    for(let i=0;i<inserts.length;i+=200){
+      const { error } = await sb.from('invoice_tracker').insert(inserts.slice(i,i+200));
+      if(error) errs.push(error.message); else done+=Math.min(200,inserts.length-i);
+      prog.textContent=`Imported ${done}…`;
+    }
+    for(const x of clean.filter(x=>x._id)){
+      const v={...x.v}; Object.keys(v).forEach(k=>{ if(v[k]==null) delete v[k]; });   // never blank out existing data
+      const { error } = await sb.from('invoice_tracker').update(v).eq('id', x._id);
+      if(error) errs.push(error.message); else done++;
+      if(done%20===0) prog.textContent=`Imported ${done}…`;
+    }
+    prog.innerHTML=`Done: ${done} of ${clean.length} rows saved.`+(errs.length?`<div style="color:var(--red)">${[...new Set(errs)].slice(0,5).map(esc).join('<br>')}</div>`:'');
+    invTrk.month=plan[0].month.slice(0,7); renderContent();
+  };
+}
+function invTrkExport(rows){
+  if(!rows.length){ alert('Nothing to export for this month / filter.'); return; }
+  const wb=XLSX.utils.book_new();
+  const head=['Sl.no','Client Name','Manager','Status','Handover.Date','Ack Received Date','ACKNOWLEDGEMENT SUBMITTED DATE','Inv. Amount','Inv.Date','Invoice No','Remarks'];
+  const d=s=>s?new Date(s+'T00:00:00'):null;
+  Object.keys(INVTRK_COMPANIES).forEach(co=>{
+    const rs=rows.filter(r=>r.company===co); if(!rs.length) return;
+    const aoa=[[INVTRK_COMPANIES[co]],head, ...rs.map((r,i)=>[r.sl_no??i+1, r.client_name, r.manager||'', r.status||'', d(r.handover_date), d(r.ack_received_date), d(r.ack_submitted_date),
+      r.amount==null?null:Number(r.amount), d(r.invoice_date), r.invoice_no&&/^\d+$/.test(r.invoice_no)?Number(r.invoice_no):(r.invoice_no||''), r.remarks||''])];
+    const total=rs.reduce((a,r)=>a+(Number(r.amount)||0),0);
+    aoa.push([],['','Total','','','','','',Math.round(total*100)/100]);
+    const ws=XLSX.utils.aoa_to_sheet(aoa,{cellDates:true, dateNF:'dd-mmm-yyyy'});
+    ws['!merges']=[{s:{r:0,c:0},e:{r:0,c:head.length-1}}];
+    ws['!cols']=[{wch:6},{wch:46},{wch:13},{wch:34},{wch:13},{wch:14},{wch:16},{wch:13},{wch:12},{wch:11},{wch:30}];
+    Object.keys(ws).forEach(a=>{ const c=ws[a]; if(c&&c.t==='d') c.z='dd-mmm-yyyy'; if(c&&c.t==='n'&&/^H\d+$/.test(a)) c.z='#,##0.00'; });
+    XLSX.utils.book_append_sheet(wb, ws, co);
+  });
+  const mo=new Date(invTrk.month+'-01T00:00:00');
+  XLSX.writeFile(wb, `Invoice Tracker - ${mo.toLocaleDateString('en-GB',{month:'long'})} - ${String(mo.getFullYear()).slice(2)}.xlsx`);
 }
 </script>
 </body>
