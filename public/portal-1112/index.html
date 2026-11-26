@@ -5043,7 +5043,7 @@ if(createSupabaseClient()){
    Accounts hand over client invoices -> scan -> the bot server reads them ->
    rows fill in. Client acknowledgement copies -> scan -> matched by invoice
    number -> "Acknowledgement Received" / "Acknowledgment submitted to finance".
-   Table: invoice_tracker · Scans: storage bucket 'invoice-scans'
+   Table: invoice_tracker · Scans are read by the bot server and not stored.
    ============================================================ */
 const INVTRK_COMPANIES = {
   ABC:'AZZURRO BUILDING CLEANING LLC',
@@ -5158,7 +5158,7 @@ async function renderInvoiceTracker(el){
     <div style="overflow-x:auto;"><table><thead><tr>
       ${writeOk?'<th><input type="checkbox" id="itAll" title="Select all shown"></th>':''}
       <th>Co.</th><th>Sl</th><th>Client</th><th>Manager</th><th>Status</th><th>Handover</th><th>Ack Rec'd</th><th>Ack to Finance</th>
-      <th style="text-align:right;">Amount</th><th>Inv. Date</th><th>Inv. No</th><th>Scans</th><th>Remarks</th>${writeOk?'<th></th>':''}
+      <th style="text-align:right;">Amount</th><th>Inv. Date</th><th>Inv. No</th><th>Remarks</th>${writeOk?'<th></th>':''}
     </tr></thead><tbody id="itBody"></tbody></table></div>
     <p class="hint">Scans are read by the AI on your bot server (chat ⚙ → bot server address and key). Check the filled values before saving. Invoice numbers are matched per company.</p>
   </div>`;
@@ -5182,10 +5182,9 @@ async function renderInvoiceTracker(el){
       <td>${esc(r.company)}</td><td>${r.sl_no??''}</td><td>${esc(r.client_name)}</td><td>${esc(r.manager||'')}</td>
       <td>${invTrkBadge(r.status)}</td><td>${fmtDate(r.handover_date)}</td><td>${fmtDate(r.ack_received_date)}</td><td>${fmtDate(r.ack_submitted_date)}</td>
       <td style="text-align:right; white-space:nowrap;">${invTrkMoney(r.amount)}</td><td>${fmtDate(r.invoice_date)}</td><td>${esc(r.invoice_no||'—')}</td>
-      <td style="white-space:nowrap;">${r.invoice_file?`<button class="icon-btn" data-file="${esc(r.invoice_file)}" title="Invoice scan">📄</button>`:''}${r.ack_file?`<button class="icon-btn" data-file="${esc(r.ack_file)}" title="Acknowledgement scan">✅</button>`:''}</td>
       <td style="max-width:220px; font-size:12px; color:var(--text-mid);">${esc(r.remarks||'')}</td>
       ${writeOk?`<td style="white-space:nowrap;"><button class="icon-btn" data-edit="${r.id}" title="Edit">✎</button>${isAdmin()?`<button class="icon-btn" data-del="${r.id}" title="Delete">🗑</button>`:''}</td>`:''}
-    </tr>`).join('') : `<tr class="empty-row"><td colspan="15">No rows for this month${invTrk.rows.length?' with these filters':''}.${(!invTrk.rows.length&&writeOk)?' Use “New month list” to copy last month\'s clients, or Upload Excel.':''}</td></tr>`;
+    </tr>`).join('') : `<tr class="empty-row"><td colspan="14">No rows for this month${invTrk.rows.length?' with these filters':''}.${(!invTrk.rows.length&&writeOk)?' Use “New month list” to copy last month\'s clients, or Upload Excel.':''}</td></tr>`;
     invTrk.shown = shown;
     bindRows();
   };
@@ -5196,7 +5195,6 @@ async function renderInvoiceTracker(el){
   };
   const bindRows = ()=>{
     el.querySelectorAll('[data-sel]').forEach(cb=>cb.onchange=()=>{ cb.checked?invTrk.selected.add(cb.dataset.sel):invTrk.selected.delete(cb.dataset.sel); updFinanceBtn(); });
-    el.querySelectorAll('[data-file]').forEach(b=>b.onclick=()=>invTrkOpenFile(b.dataset.file));
     el.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>invTrkEdit(invTrk.rows.find(r=>r.id===b.dataset.edit)));
     el.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{ const r=invTrk.rows.find(x=>x.id===b.dataset.del); deleteRecord('invoice_tracker', r.id, `${r.company} · ${r.client_name}${r.invoice_no?' · '+r.invoice_no:''}`); });
     updFinanceBtn();
@@ -5232,12 +5230,6 @@ async function renderInvoiceTracker(el){
   };
 }
 
-async function invTrkOpenFile(path){
-  const w = window.open('', '_blank');
-  const { data, error } = await sb.storage.from('invoice-scans').createSignedUrl(path, 600);
-  if(error||!data){ if(w) w.close(); alert('Could not open the scan: '+(error?.message||'not found')); return; }
-  if(w) w.location = data.signedUrl; else location.href = data.signedUrl;
-}
 
 function invTrkFields(){
   return [
@@ -5324,13 +5316,6 @@ async function invTrkRead(kind, pages, filename){
   if(!res.ok||!data.ok) throw new Error(data.error||('bot server answered '+res.status+(res.status===404?' - update the bot server (it has no invoice reader yet)':'')));
   return data;
 }
-async function invTrkUploadScan(file, folder){
-  const safe=file.name.replace(/[^A-Za-z0-9._-]+/g,'_').slice(-80);
-  const path=`${folder}/${Date.now()}-${Math.random().toString(36).slice(2,7)}-${safe}`;
-  const { error } = await sb.storage.from('invoice-scans').upload(path, file, { contentType:file.type||'application/octet-stream', upsert:false });
-  if(error) throw new Error('could not store the scan: '+error.message);
-  return path;
-}
 
 // ---------------------------------------------------------------- big modal
 function invTrkModal(title, bodyHtml, actionsHtml){
@@ -5347,7 +5332,7 @@ async function invTrkScan(kind){
   const isInv = kind==='invoice';
   const m=invTrkModal(isInv?'Scan invoices from Accounts':'Scan client acknowledgement copies', `
     <p class="hint" style="margin-top:0;">${isInv
-      ? 'Choose one or many scans (PDF, JPG or PNG). A PDF may hold several invoices. The AI reads company, client, invoice number, date and amount; you check them, then save. The scan is kept with the row.'
+      ? 'Choose one or many scans (PDF, JPG or PNG). A PDF may hold several invoices. The AI reads company, client, invoice number, date and amount; you check them, then save. Scans are only read, not stored.'
       : 'Choose the signed / stamped copies returned by the client. The AI reads the invoice number(s) and the received date, finds the matching rows (any month) and updates their status.'}</p>
     <div class="field"><label>Scanned files</label><input type="file" id="itmFiles" multiple accept=".pdf,image/*"></div>
     ${isInv?'':`<div class="field"><label>Set status to</label><select id="itmAckStatus" style="width:auto;"><option>${INVTRK_ACK}</option><option>${INVTRK_FIN}</option></select></div>`}
@@ -5436,7 +5421,7 @@ async function invTrkReviewInvoices(m, found){
   });
   const save=m.querySelector('#itmSave'); save.style.display='';
   save.onclick=async()=>{
-    save.disabled=true; const prog=m.querySelector('#itmProgress'); let ok=0; const errs=[]; const uploaded=new Map(); const used=new Set();
+    save.disabled=true; const prog=m.querySelector('#itmProgress'); let ok=0; const errs=[]; const used=new Set();
     for(const tr of body.querySelectorAll('tr[data-i]')){
       if(!tr.querySelector('[data-f=use]').checked) continue;
       const x=found[+tr.dataset.i]; const g=f=>tr.querySelector(`[data-f=${f}]`).value.trim();
@@ -5445,9 +5430,8 @@ async function invTrkReviewInvoices(m, found){
         if(!g('client_name') && !g('match')) throw new Error('client name is empty');
         if(g('match') && used.has(g('match'))) throw new Error('two invoices point to the same tracker row - pick “New row” for one');
         prog.textContent=`Saving ${g('client_name')||x.file.name}…`;
-        if(!uploaded.has(x.file)) uploaded.set(x.file, await invTrkUploadScan(x.file, `invoices/${g('month')}`));
         const v={ month:g('month')+'-01', company:g('company'), invoice_no:g('invoice_no')||null, invoice_date:g('invoice_date')||null,
-          amount:g('amount')===''?null:Number(g('amount')), status:g('status'), handover_date:g('handover_date')||null, invoice_file:uploaded.get(x.file) };
+          amount:g('amount')===''?null:Number(g('amount')), status:g('status'), handover_date:g('handover_date')||null };
         let error;
         if(g('match')){ used.add(g('match')); ({ error } = await sb.from('invoice_tracker').update(v).eq('id', g('match'))); }
         else {
@@ -5490,16 +5474,15 @@ async function invTrkReviewAcks(m, found){
   body.querySelectorAll('[data-f=match]').forEach(s=>s.onchange=()=>{ s.closest('tr').querySelector('[data-f=use]').checked=!!s.value; });
   const save=m.querySelector('#itmSave'); save.style.display='';
   save.onclick=async()=>{
-    save.disabled=true; const prog=m.querySelector('#itmProgress'); let ok=0; const errs=[]; const uploaded=new Map();
+    save.disabled=true; const prog=m.querySelector('#itmProgress'); let ok=0; const errs=[];
     const st=m.querySelector('#itmAckStatus').value;
     for(const tr of body.querySelectorAll('tr[data-i]')){
       if(!tr.querySelector('[data-f=use]').checked) continue;
       const x=found[+tr.dataset.i]; const g=f=>tr.querySelector(`[data-f=${f}]`).value;
       try{
         if(!g('match')) throw new Error(`invoice ${x.invoice_no}: choose the tracker row`);
-        if(!uploaded.has(x.file)) uploaded.set(x.file, await invTrkUploadScan(x.file, 'acknowledgements'));
         const row=pool.find(r=>r.id===g('match'));
-        const v={ status:st, ack_received_date:g('ack_received_date')||today, ack_file:uploaded.get(x.file) };
+        const v={ status:st, ack_received_date:g('ack_received_date')||today };
         if(st===INVTRK_FIN) v.ack_submitted_date=g('ack_submitted_date')||today;
         if(x.received_by && !(row.remarks||'').includes(x.received_by)) v.remarks=[row.remarks,`Ack: ${x.received_by}`].filter(Boolean).join(' · ');
         const { error } = await sb.from('invoice_tracker').update(v).eq('id', row.id);
